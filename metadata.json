@@ -1,0 +1,6 @@
+{
+  "name": "Movie Ratings",
+  "description": "Displays movie reviews and ratings on top of Netflix, Amazon Prime, and Jio Hotstar, powered by live AI reviews, ratings caching, and an overlay checker.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,623 @@
+package com.example.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.graphics.PixelFormat
+import android.os.Build
+import android.os.Bundle
+import android.os.IBinder
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.FrameLayout
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.example.MainActivity
+import com.example.data.MovieDatabase
+import com.example.data.MovieRatingEntity
+import com.example.network.GeminiClient
+import com.example.network.MovieRatingResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
+
+class FloatingOverlayService : Service() {
+
+    companion object {
+        const val ACTION_SHOW = "ACTION_SHOW"
+        const val ACTION_HIDE = "ACTION_HIDE"
+        private const val NOTIFICATION_ID = 8801
+        private const val CHANNEL_ID = "movie_ratings_overlay_channel"
+    }
+
+    private var windowManager: WindowManager? = null
+    private var overlayView: FrameLayout? = null
+    private var customLifecycleOwner: CustomFloatingLifecycleOwner? = null
+    private var isExpanded = false
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, getServiceNotification())
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_SHOW -> {
+                showOverlay()
+            }
+            ACTION_HIDE -> {
+                hideOverlay()
+                stopSelf()
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun showOverlay() {
+        if (overlayView != null) return // Already showing
+
+        OverlayState.setOverlayVisible(true)
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                WindowManager.LayoutParams.TYPE_PHONE
+            },
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 20
+            y = 400
+        }
+
+        // Define a custom LifecycleOwner + Service support for Composable inputs
+        val lifecycleOwner = CustomFloatingLifecycleOwner()
+        lifecycleOwner.start()
+        customLifecycleOwner = lifecycleOwner
+
+        overlayView = FrameLayout(this).apply {
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+        }
+
+        val composeView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setContent {
+                MaterialTheme {
+                    FloatingWidgetUI(
+                        onToggleExpand = { expanded ->
+                            isExpanded = expanded
+                            updateWindowManagerParams(expanded, params)
+                        },
+                        onCloseOverlay = {
+                            hideOverlay()
+                            stopSelf()
+                        }
+                    )
+                }
+            }
+        }
+
+        overlayView?.addView(composeView)
+        windowManager?.addView(overlayView, params)
+    }
+
+    private fun updateWindowManagerParams(expanded: Boolean, params: WindowManager.LayoutParams) {
+        if (expanded) {
+            params.flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            params.width = WindowManager.LayoutParams.MATCH_PARENT
+            params.height = WindowManager.LayoutParams.WRAP_CONTENT
+            params.gravity = Gravity.CENTER
+            params.x = 0
+            params.y = 0
+        } else {
+            params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            params.width = WindowManager.LayoutParams.WRAP_CONTENT
+            params.height = WindowManager.LayoutParams.WRAP_CONTENT
+            params.gravity = Gravity.TOP or Gravity.START
+            params.x = 20
+            params.y = 400
+        }
+        overlayView?.let { windowManager?.updateViewLayout(it, params) }
+    }
+
+    private fun hideOverlay() {
+        OverlayState.setOverlayVisible(false)
+        overlayView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                // Ignore removal bugs
+            }
+            overlayView = null
+        }
+        customLifecycleOwner?.stop()
+        customLifecycleOwner = null
+    }
+
+    override fun onDestroy() {
+        hideOverlay()
+        super.onDestroy()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Movie Overlay Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows movie ratings floating panel on top of streaming apps."
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun getServiceNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Movie Ratings Floating Overlay")
+            .setContentText("Active and overlaying on Netflix, Prime Video, and Hotstar")
+            .setSmallIcon(android.R.drawable.btn_star_big_on)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+    }
+
+    // --- Custom Lifecycle Owner for enabling Compose inside WindowManager ---
+    private class CustomFloatingLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
+        private val lifecycleRegistry = LifecycleRegistry(this)
+        private val savedStateRegistryController = SavedStateRegistryController.create(this)
+        private val _viewModelStore = ViewModelStore()
+
+        init {
+            savedStateRegistryController.performRestore(Bundle())
+        }
+
+        fun start() {
+            lifecycleRegistry.currentState = Lifecycle.State.CREATED
+            lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+        }
+
+        fun stop() {
+            lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+            _viewModelStore.clear()
+        }
+
+        override val lifecycle: Lifecycle get() = lifecycleRegistry
+        override val viewModelStore: ViewModelStore get() = _viewModelStore
+        override val savedStateRegistry: SavedStateRegistry get() = savedStateRegistryController.savedStateRegistry
+    }
+}
+
+// --- COMPOSE FLOATING WIDGET CONTENT ---
+
+@Composable
+fun FloatingWidgetUI(
+    onToggleExpand: (Boolean) -> Unit,
+    onCloseOverlay: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var offsetX by remember { mutableStateOf(20f) }
+    var offsetY by remember { mutableStateOf(400f) }
+
+    val activeApp by OverlayState.currentStreamingApp.collectAsState()
+    val detectedTitles by OverlayState.detectedTitles.collectAsState()
+    val selectedTitle by OverlayState.selectedTitle.collectAsState()
+    val ratingResult by OverlayState.ratingResult.collectAsState()
+    val isLoading by OverlayState.isOverlayLoading.collectAsState()
+
+    val context = OverlayState.currentStreamingApp.collectAsState().value?.let { null } ?: "" // Placeholder to get context inside composable
+    val composeScope = rememberCoroutineScope()
+
+    @Composable
+    fun PlatformIndicator(appName: String) {
+        val color = when (appName) {
+            "Netflix" -> Color(0xFFE50914)
+            "Prime Video" -> Color(0xFF00A8E1)
+            "Hotstar" -> Color(0xFFFFC629)
+            else -> Color(0xFF888888)
+        }
+        val textCol = if (appName == "Hotstar") Color.Black else Color.White
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(color)
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) {
+            Text(appName, fontSize = 10.sp, color = textCol)
+        }
+    }
+
+    if (!expanded) {
+        // COLLAPSED: Floating Draggable Pill
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        offsetX += dragAmount.x
+                        offsetY += dragAmount.y
+                    }
+                }
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xE01C1B1F))
+                .clickable {
+                    expanded = true
+                    onToggleExpand(true)
+                }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Star,
+                    contentDescription = "Rating badge",
+                    tint = Color(0xFFFFC629),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Column {
+                    Text("Rating Widget", color = Color.White, fontSize = 11.sp)
+                    activeApp?.let {
+                        Text(it, color = Color.LightGray, fontSize = 8.sp)
+                    }
+                }
+            }
+        }
+    } else {
+        // EXPANDED: Full Review Overlay panel
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .background(Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .height(480.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF161517),
+                    contentColor = Color.White
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    // Title Bar
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Movie,
+                                contentDescription = "Movie ratings",
+                                tint = Color(0xFFFFC629)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "MovieRatings AI",
+                                fontSize = 18.sp,
+                                color = Color.White
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            activeApp?.let { PlatformIndicator(it) }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = {
+                                    expanded = false
+                                    onToggleExpand(false)
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Collapse panel",
+                                    tint = Color.Gray
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Main display column
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        // Title selector if titles detected on screen
+                        if (detectedTitles.isNotEmpty() && ratingResult == null && !isLoading) {
+                            Text(
+                                "Titles Detected on Screen:",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                detectedTitles.forEach { title ->
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(Color(0xFF2B292D))
+                                            .clickable {
+                                                OverlayState.selectTitle(title)
+                                                OverlayState.setOverlayLoading(true)
+                                                composeScope.launch {
+                                                    val res = GeminiClient.fetchMovieReviews(title)
+                                                    OverlayState.setRatingResult(res)
+                                                    OverlayState.setOverlayLoading(false)
+                                                }
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(title, fontSize = 10.sp, color = Color.White)
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        // Search entry point inside overlay
+                        var searchQuery by remember { mutableStateOf("") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text("Search title manually...", fontSize = 12.sp) },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFFFFC629),
+                                    unfocusedBorderColor = Color.DarkGray,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        OverlayState.selectTitle(searchQuery)
+                                        OverlayState.setOverlayLoading(true)
+                                        composeScope.launch {
+                                            val res = GeminiClient.fetchMovieReviews(searchQuery)
+                                            OverlayState.setRatingResult(res)
+                                            OverlayState.setOverlayLoading(false)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFFFFC629))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = Color.Black
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        if (isLoading) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = Color(0xFFFFC629))
+                            }
+                        } else if (ratingResult != null) {
+                            val movie = ratingResult!!
+                            // MOVIE RESULT CARDS
+                            Text(
+                                text = movie.title,
+                                fontSize = 21.sp,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "${movie.year} • Led by ${movie.director} • ${movie.genre}",
+                                fontSize = 11.sp,
+                                color = Color.Gray
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // RATINGS ROW
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                                horizontalArrangement = Arrangement.SpaceAround
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("IMDb", fontSize = 11.sp, color = Color.Gray, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
+                                    Text(movie.imdb, fontSize = 16.sp, color = Color(0xFFFFC629), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Rotten Tomatoes", fontSize = 11.sp, color = Color.Gray, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
+                                    Text(movie.rottenTomatoes, fontSize = 16.sp, color = Color(0xFFE50914), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // Synopsis
+                            Text("Synopsis", fontSize = 12.sp, color = Color.Gray)
+                            Text(movie.synopsis, fontSize = 12.sp, color = Color.LightGray)
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Critics Synthesis
+                            Text("Positive Reviews", fontSize = 12.sp, color = Color(0xFF4CAF50))
+                            Text(movie.positiveSummary, fontSize = 11.sp, color = Color.LightGray)
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text("Critical Consensus", fontSize = 12.sp, color = Color(0xFFE50914))
+                            Text(movie.negativeSummary, fontSize = 11.sp, color = Color.LightGray)
+
+                            Spacer(modifier = Modifier.height(16.dp))
+                        } else {
+                            // Empty State
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Default.Movie,
+                                        contentDescription = "Search placeholder",
+                                        tint = Color.DarkGray,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        "Select a detected title or type a query above to load live review card",
+                                        fontSize = 11.sp,
+                                        color = Color.Gray,
+                                        modifier = Modifier.padding(horizontal = 24.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Reset Button
+                    if (ratingResult != null) {
+                        Button(
+                            onClick = { OverlayState.setRatingResult(null) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2B292D),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Search another film", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
