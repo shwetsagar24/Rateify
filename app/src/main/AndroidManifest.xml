@@ -44,7 +44,7 @@
             android:name=".service.MovieOverlayAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true"
-            android:label="MovieRatings AI Auto-Scanner">
+            android:label="Rateify AI Auto-Scanner">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

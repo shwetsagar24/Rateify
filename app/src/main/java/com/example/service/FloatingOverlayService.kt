@@ -61,6 +61,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -180,6 +181,26 @@ class FloatingOverlayService : Service() {
                         onCloseOverlay = {
                             hideOverlay()
                             stopSelf()
+                        },
+                        onDrag = { dx, dy ->
+                            if (!isExpanded) {
+                                params.x = (params.x + dx).toInt()
+                                params.y = (params.y + dy).toInt()
+                                OverlayState.updateDragState(true, params.y)
+                                overlayView?.let { windowManager?.updateViewLayout(it, params) }
+                            }
+                        },
+                        onDragStart = {
+                            OverlayState.updateDragState(true, params.y)
+                        },
+                        onDragEnd = {
+                            val screenHeight = resources.displayMetrics.heightPixels
+                            val isDismiss = OverlayState.dragY.value > (screenHeight * 0.72f)
+                            OverlayState.updateDragState(false, 0)
+                            if (isDismiss) {
+                                hideOverlay()
+                                stopSelf()
+                            }
                         }
                     )
                 }
@@ -250,9 +271,9 @@ class FloatingOverlayService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Movie Ratings Floating Overlay")
-            .setContentText("Active and overlaying on Netflix, Prime Video, and Hotstar")
-            .setSmallIcon(android.R.drawable.btn_star_big_on)
+            .setContentTitle("Rateify Floating Overlay")
+            .setContentText("Active and overlaying on Netflix, Prime Video, Jio Hotstar, SonyLIV, ZEE5")
+            .setSmallIcon(android.R.drawable.ic_menu_info_details)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
@@ -289,11 +310,12 @@ class FloatingOverlayService : Service() {
 @Composable
 fun FloatingWidgetUI(
     onToggleExpand: (Boolean) -> Unit,
-    onCloseOverlay: () -> Unit
+    onCloseOverlay: () -> Unit,
+    onDrag: (Float, Float) -> Unit,
+    onDragStart: () -> Unit = {},
+    onDragEnd: () -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var offsetX by remember { mutableStateOf(20f) }
-    var offsetY by remember { mutableStateOf(400f) }
 
     val activeApp by OverlayState.currentStreamingApp.collectAsState()
     val detectedTitles by OverlayState.detectedTitles.collectAsState()
@@ -301,18 +323,42 @@ fun FloatingWidgetUI(
     val ratingResult by OverlayState.ratingResult.collectAsState()
     val isLoading by OverlayState.isOverlayLoading.collectAsState()
 
-    val context = OverlayState.currentStreamingApp.collectAsState().value?.let { null } ?: "" // Placeholder to get context inside composable
+    val isDragging by OverlayState.isDragging.collectAsState()
+    val dragY by OverlayState.dragY.collectAsState()
+    val screenHeight = androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics.heightPixels
+    val isInDismissZone = isDragging && dragY > (screenHeight * 0.72f)
+
     val composeScope = rememberCoroutineScope()
+
+    LaunchedEffect(detectedTitles) {
+        if (detectedTitles.isNotEmpty()) {
+            val firstTitle = detectedTitles.first()
+            val currentResult = OverlayState.ratingResult.value
+            if (currentResult == null || currentResult.title.lowercase() != firstTitle.lowercase()) {
+                OverlayState.setOverlayLoading(true)
+                try {
+                    val res = GeminiClient.fetchMovieReviews(firstTitle)
+                    OverlayState.setRatingResult(res)
+                } catch (e: Exception) {
+                    // Ignore
+                } finally {
+                    OverlayState.setOverlayLoading(false)
+                }
+            }
+        }
+    }
 
     @Composable
     fun PlatformIndicator(appName: String) {
         val color = when (appName) {
             "Netflix" -> Color(0xFFE50914)
             "Prime Video" -> Color(0xFF00A8E1)
-            "Hotstar" -> Color(0xFFFFC629)
+            "Jio Hotstar", "Hotstar" -> Color(0xFFFFC629)
+            "SonyLIV" -> Color(0xFFE25C3E)
+            "ZEE5" -> Color(0xFF8E24AA)
             else -> Color(0xFF888888)
         }
-        val textCol = if (appName == "Hotstar") Color.Black else Color.White
+        val textCol = if (appName == "Jio Hotstar" || appName == "Hotstar") Color.Black else Color.White
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))
@@ -327,16 +373,19 @@ fun FloatingWidgetUI(
         // COLLAPSED: Floating Draggable Pill
         Box(
             modifier = Modifier
-                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
                 .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
-                    }
+                    detectDragGestures(
+                        onDragStart = { onDragStart() },
+                        onDragEnd = { onDragEnd() },
+                        onDragCancel = { onDragEnd() },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            onDrag(dragAmount.x, dragAmount.y)
+                        }
+                    )
                 }
                 .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xE01C1B1F))
+                .background(if (isInDismissZone) Color(0xFFEF4444) else Color(0xE01C1B1F))
                 .clickable {
                     expanded = true
                     onToggleExpand(true)
@@ -348,17 +397,47 @@ fun FloatingWidgetUI(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Star,
-                    contentDescription = "Rating badge",
-                    tint = Color(0xFFFFC629),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Column {
-                    Text("Rating Widget", color = Color.White, fontSize = 11.sp)
-                    activeApp?.let {
-                        Text(it, color = Color.LightGray, fontSize = 8.sp)
+                if (isInDismissZone) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Release to dismiss",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "RELEASE TO DISMISS",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = "Rating badge",
+                        tint = Color(0xFFFFC629),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column {
+                        if (ratingResult != null) {
+                            val movie = ratingResult!!
+                            Text(movie.title, color = Color.White, fontSize = 11.sp, maxLines = 1)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("IMDb: ${movie.imdb}", color = Color(0xFFFFC629), fontSize = 9.sp)
+                                if (movie.rottenTomatoes != "N/A" && movie.rottenTomatoes.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("RT: ${movie.rottenTomatoes}", color = Color(0xFFFF5252), fontSize = 9.sp)
+                                }
+                            }
+                        } else if (isLoading) {
+                            Text("Fetching rating...", color = Color.LightGray, fontSize = 11.sp)
+                        } else {
+                            Text("Rating Widget", color = Color.White, fontSize = 11.sp)
+                            activeApp?.let {
+                                Text(it, color = Color.LightGray, fontSize = 8.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -402,7 +481,7 @@ fun FloatingWidgetUI(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "MovieRatings AI",
+                                text = "Rateify AI",
                                 fontSize = 18.sp,
                                 color = Color.White
                             )
@@ -563,7 +642,96 @@ fun FloatingWidgetUI(
                             Text("Synopsis", fontSize = 12.sp, color = Color.Gray)
                             Text(movie.synopsis, fontSize = 12.sp, color = Color.LightGray)
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            // IMDb Parents Guide in IMDb Style
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFF221F24))
+                                    .padding(12.dp)
+                            ) {
+                                Text(
+                                    "IMDb Parents Guide",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFFFC629),
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                val categories = listOf(
+                                    Triple("Sex & Nudity", movie.parentsGuideSex ?: "None", Color(0xFFE57373)),
+                                    Triple("Violence & Gore", movie.parentsGuideViolence ?: "None", Color(0xFFFF5252)),
+                                    Triple("Profanity", movie.parentsGuideProfanity ?: "None", Color(0xFFFFB74D)),
+                                    Triple("Alcohol, Drugs & Smoking", movie.parentsGuideDrugs ?: "None", Color(0xFF64B5F6)),
+                                    Triple("Frightening & Intense", movie.parentsGuideIntense ?: "None", Color(0xFFBA68C8))
+                                )
+
+                                categories.forEach { (categoryName, value, tintColor) ->
+                                    val level = when {
+                                        value.lowercase().startsWith("severe") -> "Severe"
+                                        value.lowercase().startsWith("moderate") -> "Moderate"
+                                        value.lowercase().startsWith("mild") -> "Mild"
+                                        else -> "None"
+                                    }
+
+                                    val badgeColor = when (level) {
+                                        "Severe" -> Color(0xFFEF4444)       // M3 Red
+                                        "Moderate" -> Color(0xFFF97316)     // M3 Orange
+                                        "Mild" -> Color(0xFF10B981)         // M3 Green
+                                        else -> Color(0xFF6B7280)           // M3 Grey
+                                    }
+
+                                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = categoryName,
+                                                fontSize = 11.sp,
+                                                color = Color.White,
+                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                            )
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(badgeColor)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = level.uppercase(),
+                                                    fontSize = 8.sp,
+                                                    color = Color.White,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                                )
+                                            }
+                                        }
+
+                                        val desc = if (value.contains(" - ")) {
+                                            value.substringAfter(" - ").trim()
+                                        } else if (value.contains(": ")) {
+                                            value.substringAfter(": ").trim()
+                                        } else {
+                                            value
+                                        }
+
+                                        if (desc.isNotBlank() && desc != "None" && !desc.lowercase().startsWith("none")) {
+                                            Text(
+                                                text = desc,
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF9CA3AF),
+                                                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
 
                             // Critics Synthesis
                             Text("Positive Reviews", fontSize = 12.sp, color = Color(0xFF4CAF50))

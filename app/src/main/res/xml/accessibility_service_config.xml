@@ -5,5 +5,4 @@
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:notificationTimeout="100"
-    android:packageNames="com.netflix.mediaclient,com.amazon.avod.thirdpartyclient,com.amazon.amazonvideo,in.startv.hotstar,com.jio.media.ondemand"
     android:canRetrieveWindowContent="true" />

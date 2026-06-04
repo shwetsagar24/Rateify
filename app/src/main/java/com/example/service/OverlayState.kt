@@ -23,6 +23,12 @@ object OverlayState {
     private val _isOverlayVisible = MutableStateFlow(false)
     val isOverlayVisible = _isOverlayVisible.asStateFlow()
 
+    private val _isDragging = MutableStateFlow(false)
+    val isDragging = _isDragging.asStateFlow()
+
+    private val _dragY = MutableStateFlow(0)
+    val dragY = _dragY.asStateFlow()
+
     fun setStreamingApp(app: String?) {
         _currentStreamingApp.value = app
     }
@@ -46,5 +52,10 @@ object OverlayState {
 
     fun setOverlayVisible(visible: Boolean) {
         _isOverlayVisible.value = visible
+    }
+
+    fun updateDragState(dragging: Boolean, y: Int) {
+        _isDragging.value = dragging
+        _dragY.value = y
     }
 }

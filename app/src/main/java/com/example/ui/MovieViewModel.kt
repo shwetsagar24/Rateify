@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.MovieDatabase
@@ -24,15 +25,9 @@ sealed interface SearchUiState {
 
 class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val db = MovieDatabase.getDatabase(application)
-    private val dao = db.movieDao()
-
-    val searchHistory: StateFlow<List<MovieRatingEntity>> = dao.getAllRatingsFlow()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    // Keep history strictly in-memory (ephemeral) as requested, no offline database syncing or persistent cache fetching
+    private val _searchHistory = MutableStateFlow<List<MovieRatingEntity>>(emptyList())
+    val searchHistory: StateFlow<List<MovieRatingEntity>> = _searchHistory.asStateFlow()
 
     private val _searchUiState = MutableStateFlow<SearchUiState>(SearchUiState.Idle)
     val searchUiState: StateFlow<SearchUiState> = _searchUiState.asStateFlow()
@@ -43,54 +38,57 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _searchUiState.value = SearchUiState.Loading
 
-            // 1. Check if the movie already exists in Room database cache
-            val existing = dao.getRatingByTitle("%$title%")
-            if (existing != null) {
-                // Update timestamp to bring it to the top of search history
-                val updated = existing.copy(timestamp = System.currentTimeMillis())
-                dao.insertRating(updated)
-                _searchUiState.value = SearchUiState.Success(updated)
-                return@launch
+            // Always fetch freshly from the network as requested
+            val networkResult = try {
+                GeminiClient.fetchMovieReviews(title)
+            } catch (e: Exception) {
+                Log.e("MovieViewModel", "Network fetch failed", e)
+                null
             }
 
-            // 2. Fetch using Gemini API
-            val result = GeminiClient.fetchMovieReviews(title)
-            if (result != null) {
+            if (networkResult != null) {
                 val entity = MovieRatingEntity(
-                    title = result.title,
-                    year = result.year,
-                    director = result.director,
-                    genre = result.genre,
-                    imdb = result.imdb,
-                    rottenTomatoes = result.rottenTomatoes,
-                    metacritic = result.metacritic,
-                    synopsis = result.synopsis,
-                    positiveSummary = result.positiveSummary,
-                    negativeSummary = result.negativeSummary,
-                    platforms = result.platforms
+                    id = System.nanoTime(), // Generates unique temp ID for in-memory display
+                    title = networkResult.title,
+                    year = networkResult.year,
+                    director = networkResult.director,
+                    genre = networkResult.genre,
+                    imdb = networkResult.imdb,
+                    rottenTomatoes = networkResult.rottenTomatoes,
+                    metacritic = networkResult.metacritic,
+                    synopsis = networkResult.synopsis,
+                    positiveSummary = networkResult.positiveSummary,
+                    negativeSummary = networkResult.negativeSummary,
+                    platforms = networkResult.platforms,
+                    timestamp = System.currentTimeMillis()
                 )
-                dao.insertRating(entity)
+
+                // Update in-memory history: remove duplicate (by lowercase match) and add fresh one to top
+                val currentList = _searchHistory.value.toMutableList()
+                currentList.removeAll { it.title.lowercase().trim() == entity.title.lowercase().trim() }
+                currentList.add(0, entity)
+                _searchHistory.value = currentList.take(20) // Cap to 20 recent searches
+
                 _searchUiState.value = SearchUiState.Success(entity)
             } else {
-                _searchUiState.value = SearchUiState.Error("Failed to fetch cinematic review. Check your network or API key settings.")
+                _searchUiState.value = SearchUiState.Error("Failed to fetch fresh live details. Please check your internet connection or API settings.")
             }
         }
     }
 
     fun deleteHistoryItem(id: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.deleteRatingById(id)
-        }
+        val currentList = _searchHistory.value.toMutableList()
+        currentList.removeAll { it.id == id }
+        _searchHistory.value = currentList
     }
 
     fun clearAllHistory() {
-        viewModelScope.launch(Dispatchers.IO) {
-            dao.clearAll()
-        }
+        _searchHistory.value = emptyList()
     }
     
     fun selectCachedMovie(movie: MovieRatingEntity) {
-        _searchUiState.value = SearchUiState.Success(movie)
+        // Fetch freshly from network instead of using stored rating state
+        searchMovie(movie.title)
     }
 
     fun resetSearchState() {

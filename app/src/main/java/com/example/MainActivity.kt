@@ -44,6 +44,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.MovieRatingEntity
 import com.example.network.GeminiClient
@@ -58,6 +60,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        
+        // Initialize custom API Key from persistent local SharedPreferences storage
+        val sharedPrefs = getSharedPreferences("RateifyPrefs", MODE_PRIVATE)
+        com.example.network.GeminiClient.customApiKey = sharedPrefs.getString("gemini_api_key", null)
+
         setContent {
             MyApplicationTheme {
                 Scaffold(
@@ -105,6 +112,7 @@ fun MovieRatingsScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var activeTab by remember { mutableStateOf(0) } // 0: Search & Settings, 1: Platform Hub
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     // Ambient glow animation for active streaming tracker status
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -167,7 +175,7 @@ fun MovieRatingsScreen(
                     Spacer(modifier = Modifier.width(14.dp))
                     Column {
                         Text(
-                            text = "MovieRatings AI",
+                            text = "Rateify AI",
                             fontSize = 22.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color.White,
@@ -182,52 +190,75 @@ fun MovieRatingsScreen(
                     }
                 }
 
-                // Interactive Quick HUD controller pill
-                val overlayActive by OverlayState.isOverlayVisible.collectAsState()
                 Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(30.dp))
-                        .background(Color(0xFF131116))
-                        .border(1.dp, Color(0xFF222027), RoundedCornerShape(30.dp))
-                        .clickable {
-                            if (isOverlayGranted) {
-                                val isServiceActive = OverlayState.isOverlayVisible.value
-                                val action = if (isServiceActive) {
-                                    FloatingOverlayService.ACTION_HIDE
-                                } else {
-                                    FloatingOverlayService.ACTION_SHOW
-                                }
-                                triggerOverlay(context, action)
-                                Toast.makeText(
-                                    context,
-                                    if (isServiceActive) "Overlay Suspended" else "Overlay Activated",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            } else {
-                                Toast.makeText(context, "Please grant Overlay permission below", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                        .testTag("toggle_overlay_quick")
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Box(
+                    // Interactive Quick HUD controller pill
+                    val overlayActive by OverlayState.isOverlayVisible.collectAsState()
+                    Row(
                         modifier = Modifier
-                            .size(8.dp)
+                            .clip(RoundedCornerShape(30.dp))
+                            .background(Color(0xFF131116))
+                            .border(1.dp, Color(0xFF222027), RoundedCornerShape(30.dp))
+                            .clickable {
+                                if (isOverlayGranted) {
+                                    val isServiceActive = OverlayState.isOverlayVisible.value
+                                    val action = if (isServiceActive) {
+                                        FloatingOverlayService.ACTION_HIDE
+                                    } else {
+                                        FloatingOverlayService.ACTION_SHOW
+                                    }
+                                    triggerOverlay(context, action)
+                                    Toast.makeText(
+                                        context,
+                                        if (isServiceActive) "Overlay Suspended" else "Overlay Activated",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    Toast.makeText(context, "Please grant Overlay permission below", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            .testTag("toggle_overlay_quick")
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (overlayActive) Color(0xFF10B981).copy(alpha = pulseAlpha)
+                                    else Color(0xFF4A4950)
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (overlayActive) "HUD ONLINE" else "HUD PAUSED",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (overlayActive) Color(0xFF10B981) else Color(0xFF8B8894),
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+
+                    // Settings Icon
+                    IconButton(
+                        onClick = { showSettingsDialog = true },
+                        modifier = Modifier
+                            .size(38.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (overlayActive) Color(0xFF10B981).copy(alpha = pulseAlpha)
-                                else Color(0xFF4A4950)
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (overlayActive) "HUD ONLINE" else "HUD PAUSED",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (overlayActive) Color(0xFF10B981) else Color(0xFF8B8894),
-                        letterSpacing = 0.5.sp
-                    )
+                            .background(Color(0xFF131116))
+                            .border(1.dp, Color(0xFF222027), CircleShape)
+                            .testTag("open_settings_icon")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
@@ -302,9 +333,83 @@ fun MovieRatingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     // SETUP PERMISSIONS COMPANION CARD
+                    val isSetupComplete = isOverlayGranted && isAccessibilityGranted
+                    if (!isSetupComplete) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color(0xFF121015),
+                                    contentColor = Color.White
+                                ),
+                                border = BorderStroke(1.dp, Color(0xFF1E1C24))
+                            ) {
+                                Column(modifier = Modifier.padding(18.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column {
+                                            Text(
+                                                "Background Scanner Setup",
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                "Enable permissions to auto-inject reviews as you browse streaming lists.",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF8B8894)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    PermissionStatusRow(
+                                        title = "Display Over Other Apps",
+                                        desc = "Grants authority to compile HUD feedback bubbles on Prime Video, Netflix, Jio Hotstar, SonyLIV, and ZEE5.",
+                                        granted = isOverlayGranted,
+                                        onGrantClick = {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                                val intent = Intent(
+                                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    Uri.parse("package:${context.packageName}")
+                                                )
+                                                context.startActivity(intent)
+                                            }
+                                        }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    HorizontalDivider(color = Color(0xFF1E1C24))
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    PermissionStatusRow(
+                                        title = "Accessibility Auto-Scanner",
+                                        desc = "Inspects passive title changes when on media apps to query relevant review aggregates.",
+                                        granted = isAccessibilityGranted,
+                                        onGrantClick = {
+                                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                            context.startActivity(intent)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // GEMINI API KEY CONFIGURATION CARD
                     item {
+                        var isEditingKey by remember { mutableStateOf(false) }
+                        val currentSavedKey = remember { mutableStateOf(com.example.network.GeminiClient.customApiKey ?: "") }
+                        var tempKeyText by remember { mutableStateOf(currentSavedKey.value) }
+                        var isPasswordVisible by remember { mutableStateOf(false) }
+
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().testTag("gemini_key_card"),
                             shape = RoundedCornerShape(20.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = Color(0xFF121015),
@@ -315,54 +420,152 @@ fun MovieRatingsScreen(
                             Column(modifier = Modifier.padding(18.dp)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Column {
-                                        Text(
-                                            "Background Scanner Setup",
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                        Text(
-                                            "Enable permissions to auto-inject reviews as you browse streaming lists.",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF8B8894)
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.VpnKey,
+                                        contentDescription = "Gemini Key Icon",
+                                        tint = Color(0xFFFFC529),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        "Gemini AI API Key",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
                                 }
+                                
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Configure your personal Gemini API key to query high-fidelity critic ratings, summaries, and platform details. Alternatively, configure 'GEMINI_API_KEY' in the AI Studio Secrets panel.",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF8B8894)
+                                )
 
-                                Spacer(modifier = Modifier.height(16.dp))
+                                Spacer(modifier = Modifier.height(14.dp))
 
-                                PermissionStatusRow(
-                                    title = "Display Over Other Apps",
-                                    desc = "Grants authority to compile HUD feedback bubbles on Prime Video, Netflix, and Jio Hotstar.",
-                                    granted = isOverlayGranted,
-                                    onGrantClick = {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                            val intent = Intent(
-                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                Uri.parse("package:${context.packageName}")
-                                            )
-                                            context.startActivity(intent)
+                                if (isEditingKey) {
+                                    OutlinedTextField(
+                                        value = tempKeyText,
+                                        onValueChange = { tempKeyText = it },
+                                        placeholder = { Text("AIzaSy...", color = Color(0xFF63616B), fontSize = 13.sp) },
+                                        singleLine = true,
+                                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth().testTag("gemini_key_input"),
+                                        shape = RoundedCornerShape(12.dp),
+                                        trailingIcon = {
+                                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                                                Icon(
+                                                    imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                                    contentDescription = "Toggle Key Visibility",
+                                                    tint = Color(0xFF8B8894)
+                                                )
+                                            }
+                                        },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color(0xFFFFC529),
+                                            unfocusedBorderColor = Color(0xFF1E1C24),
+                                            focusedContainerColor = Color(0xFF0D0C0E),
+                                            unfocusedContainerColor = Color(0xFF0D0C0E),
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        TextButton(
+                                            onClick = {
+                                                isEditingKey = false
+                                                tempKeyText = currentSavedKey.value
+                                            }
+                                        ) {
+                                            Text("Cancel", color = Color(0xFF8B8894))
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Button(
+                                            onClick = {
+                                                val saved = tempKeyText.trim()
+                                                val sharedPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
+                                                sharedPrefs.edit().putString("gemini_api_key", saved.ifBlank { null }).apply()
+                                                com.example.network.GeminiClient.customApiKey = saved.ifBlank { null }
+                                                currentSavedKey.value = saved
+                                                isEditingKey = false
+                                                Toast.makeText(context, "Gemini API Key Saved!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC529), contentColor = Color.Black),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Text("Save & Connect", fontWeight = FontWeight.Bold)
                                         }
                                     }
-                                )
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(
+                                                        if (currentSavedKey.value.isNotBlank() || (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")) Color(0xFF10B981)
+                                                        else Color(0xFFEF4444)
+                                                    )
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = if (currentSavedKey.value.isNotBlank()) {
+                                                    "Custom Key Connected"
+                                                } else if (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY") {
+                                                    "AI Studio Key Linked"
+                                                } else {
+                                                    "Key Missing (Fallback Active)"
+                                                },
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (currentSavedKey.value.isNotBlank() || (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")) Color(0xFF10B981)
+                                                else Color(0xFFEF4444)
+                                            )
+                                        }
 
-                                Spacer(modifier = Modifier.height(12.dp))
-                                HorizontalDivider(color = Color(0xFF1E1C24))
-                                Spacer(modifier = Modifier.height(12.dp))
-
-                                PermissionStatusRow(
-                                    title = "Accessibility Auto-Scanner",
-                                    desc = "Inspects passive title changes when on media apps to query relevant review aggregates.",
-                                    granted = isAccessibilityGranted,
-                                    onGrantClick = {
-                                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                        context.startActivity(intent)
+                                        Row {
+                                            if (currentSavedKey.value.isNotBlank()) {
+                                                IconButton(
+                                                    onClick = {
+                                                        val sharedPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
+                                                        sharedPrefs.edit().remove("gemini_api_key").apply()
+                                                        com.example.network.GeminiClient.customApiKey = null
+                                                        currentSavedKey.value = ""
+                                                        tempKeyText = ""
+                                                        Toast.makeText(context, "Custom Key Cleared!", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Delete key",
+                                                        tint = Color(0xFFEF4444)
+                                                    )
+                                                }
+                                            }
+                                            IconButton(
+                                                onClick = { isEditingKey = true }
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Edit key",
+                                                    tint = Color(0xFFFFC529)
+                                                )
+                                            }
+                                        }
                                     }
-                                )
+                                }
                             }
                         }
                     }
@@ -544,7 +747,7 @@ fun MovieRatingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "Offline Cache (${searchHistory.size} Items)",
+                                "Recent Searches",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -584,7 +787,7 @@ fun MovieRatingsScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "No queries cached offline yet.",
+                                    "No recent searches yet.",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = Color(0xFF63616B)
@@ -607,6 +810,241 @@ fun MovieRatingsScreen(
                 )
             }
         }
+    }
+
+    if (showSettingsDialog) {
+        val localPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
+        var tempKeyText by remember { mutableStateOf(com.example.network.GeminiClient.customApiKey ?: "") }
+        var isPasswordVisible by remember { mutableStateOf(false) }
+        var isEditingKey by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings Icon",
+                        tint = Color(0xFFFFC529),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "System Settings",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Configure your Real-Time Overlay scanning permissions and Gemini AI key integrations in one integrated control desk.",
+                        color = Color(0xFF8B8894),
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp
+                    )
+
+                    // Card 1: Permissions Integration
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF1B191F),
+                            contentColor = Color.White
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFF2C2933))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Background Scanner Setup",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Required to scan active streaming content:",
+                                fontSize = 10.sp,
+                                color = Color(0xFF8B8894)
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            PermissionStatusRow(
+                                title = "Display Over Other Apps",
+                                desc = "Required to render the rating overlay feedback bubbles over other video services.",
+                                granted = isOverlayGranted,
+                                onGrantClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = Color(0xFF2C2933))
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            PermissionStatusRow(
+                                title = "Accessibility Scanner",
+                                desc = "Required to read active movie/show titles in your favorite streaming apps.",
+                                granted = isAccessibilityGranted,
+                                onGrantClick = {
+                                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    context.startActivity(intent)
+                                }
+                            )
+                        }
+                    }
+
+                    // Card 2: Gemini API Key Setup
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF1B191F),
+                            contentColor = Color.White
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFF2C2933))
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.VpnKey,
+                                    contentDescription = "Key Icon",
+                                    tint = Color(0xFFFFC529),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Gemini AI API Key",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                "Configure your custom key to unlock critic consensus summaries.",
+                                fontSize = 10.sp,
+                                color = Color(0xFF8B8894)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (isEditingKey) {
+                                OutlinedTextField(
+                                    value = tempKeyText,
+                                    onValueChange = { tempKeyText = it },
+                                    placeholder = { Text("AIzaSy...", color = Color(0xFF63616B), fontSize = 12.sp) },
+                                    singleLine = true,
+                                    visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    trailingIcon = {
+                                        IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                                            Icon(
+                                                imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                                contentDescription = "Toggle Visibility",
+                                                tint = Color(0xFF8B8894),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    },
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFFFFC529),
+                                        unfocusedBorderColor = Color(0xFF2C2933),
+                                        focusedContainerColor = Color(0xFF0D0C0E),
+                                        unfocusedContainerColor = Color(0xFF0D0C0E),
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(onClick = { isEditingKey = false }) {
+                                        Text("Cancel", color = Color(0xFF8B8894), fontSize = 12.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Button(
+                                        onClick = {
+                                            val saved = tempKeyText.trim()
+                                            localPrefs.edit().putString("gemini_api_key", saved.ifBlank { null }).apply()
+                                            com.example.network.GeminiClient.customApiKey = saved.ifBlank { null }
+                                            isEditingKey = false
+                                            Toast.makeText(context, "API Key Saved!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC529), contentColor = Color.Black),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Save", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    val hasKey = com.example.network.GeminiClient.customApiKey.let { !it.isNullOrBlank() } || (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(if (hasKey) Color(0xFF10B981) else Color(0xFFEF4444))
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (com.example.network.GeminiClient.customApiKey.let { !it.isNullOrBlank() }) "Custom Key Connected" else if (hasKey) "AI Studio Key Linked" else "Key Missing",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (hasKey) Color(0xFF10B981) else Color(0xFFEF4444)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { isEditingKey = true },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit Key",
+                                            tint = Color(0xFFFFC529),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showSettingsDialog = false }
+                ) {
+                    Text("Close", color = Color(0xFFFFC529), fontWeight = FontWeight.ExtraBold)
+                }
+            },
+            containerColor = Color(0xFF121015),
+            shape = RoundedCornerShape(24.dp)
+        )
     }
 }
 
@@ -775,13 +1213,16 @@ fun MovieReviewDetailCard(
                     }
                 } else {
                     platforms.forEach { platform ->
-                        val color = when (platform) {
+                        val trimmed = platform.trim()
+                        val color = when (trimmed) {
                             "Netflix" -> Color(0xFFE50914)
                             "Prime Video" -> Color(0xFF00A8E1)
-                            "Hotstar" -> Color(0xFFFFC629)
+                            "Hotstar", "Jio Hotstar" -> Color(0xFFFFC629)
+                            "SonyLIV" -> Color(0xFFE25C3E)
+                            "ZEE5" -> Color(0xFF8E24AA)
                             else -> Color(0xFF1F1C25)
                         }
-                        val textCol = if (platform == "Hotstar") Color.Black else Color.White
+                        val textCol = if (trimmed == "Hotstar" || trimmed == "Jio Hotstar") Color.Black else Color.White
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
@@ -932,135 +1373,314 @@ fun HistoryRatingRow(
 fun CuratedPlatformCatalog(
     onMovieSelect: (String) -> Unit
 ) {
-    var platformTabIndex by remember { mutableStateOf(0) } // 0: Netflix, 1: Prime Video, 2: Jio Hotstar
+    var selectedPlatform by remember { mutableStateOf("All") }
+    var selectedType by remember { mutableStateOf("All") }
 
-    val netflixCatalog = listOf(
-        CatalogItem("Stranger Things", "Sci-Fi, Horror • Series", "8.7/10"),
-        CatalogItem("Squid Game", "Thriller, Drama • Series", "8.0/10"),
-        CatalogItem("The Irishman", "Crime, Drama • Movie", "7.8/10"),
-        CatalogItem("Black Mirror", "Sci-Fi • Series", "8.7/10"),
-        CatalogItem("Red Notice", "Action, Comedy • Movie", "6.3/10")
+    val allCatalog = listOf(
+        // NETFLIX
+        CatalogItem("Stranger Things", "Sci-Fi, Supernatural, Mystery", "Series", "8.7/10", "Netflix"),
+        CatalogItem("Squid Game", "Survival, Thriller, Drama", "Series", "8.0/10", "Netflix"),
+        CatalogItem("The Irishman", "Crime, Biographical, Drama", "Movie", "7.8/10", "Netflix"),
+        CatalogItem("Black Mirror", "Sci-Fi, Satire, Anthology", "Series", "8.7/10", "Netflix"),
+        CatalogItem("Red Notice", "Action, Comedy, Heist", "Movie", "6.3/10", "Netflix"),
+        CatalogItem("The Last Dance", "Sports, History, Biography", "Documentary", "9.1/10", "Netflix"),
+        CatalogItem("Our Planet", "Nature, Science, Environment", "Documentary", "9.3/10", "Netflix"),
+        CatalogItem("Glass Onion: Knives Out", "Mystery, Comedy, Crime", "Movie", "7.1/10", "Netflix"),
+
+        // PRIME VIDEO
+        CatalogItem("The Boys", "Action, Dark Comedy, Superhero", "Series", "8.7/10", "Prime Video"),
+        CatalogItem("Inception", "Sci-Fi, Heist, Suspense", "Movie", "8.8/10", "Prime Video"),
+        CatalogItem("The Rings of Power", "Fantasy, Adventure, Drama", "Series", "7.0/10", "Prime Video"),
+        CatalogItem("Road House", "Action, Thriller, Combat", "Movie", "6.2/10", "Prime Video"),
+        CatalogItem("Fleabag", "Comedy, Drama, Romantic", "Series", "8.7/10", "Prime Video"),
+        CatalogItem("Val", "Biographical, Arts, Cinema", "Documentary", "7.6/10", "Prime Video"),
+        CatalogItem("One Child Nation", "History, Politics, Investigative", "Documentary", "7.5/10", "Prime Video"),
+        CatalogItem("Interstellar", "Sci-Fi, Space Travel, Drama", "Movie", "8.7/10", "Prime Video"),
+
+        // JIO HOTSTAR
+        CatalogItem("Sholay", "Classic Action, Western, Drama", "Movie", "8.2/10", "Jio Hotstar"),
+        CatalogItem("Chhichhore", "Drama, Comedy, Inspiring", "Movie", "8.3/10", "Jio Hotstar"),
+        CatalogItem("Loki", "Fantasy, Sci-Fi, Adventure", "Series", "8.2/10", "Jio Hotstar"),
+        CatalogItem("Special Ops", "Spy, Thriller, Action", "Series", "8.6/10", "Jio Hotstar"),
+        CatalogItem("Free Solo", "Extreme Sports, Adventure", "Documentary", "8.1/10", "Jio Hotstar"),
+        CatalogItem("The Beatles: Get Back", "Music, Bio, Historical", "Documentary", "9.0/10", "Jio Hotstar"),
+        CatalogItem("Guardians of the Galaxy 3", "Sci-Fi, Comedy, Adventure", "Movie", "7.9/10", "Jio Hotstar"),
+
+        // SONYLIV
+        CatalogItem("Scam 1992", "Drama, Financial Crime, Biographical", "Series", "9.3/10", "SonyLIV"),
+        CatalogItem("Gullak", "Comedy, Family, Heartwarming", "Series", "9.1/10", "SonyLIV"),
+        CatalogItem("Rocket Boys", "Drama, Biography, Science", "Series", "8.9/10", "SonyLIV"),
+        CatalogItem("Undekhi", "Crime, Thriller, Suspense", "Series", "7.9/10", "SonyLIV"),
+        CatalogItem("Maharani", "Political, Drama, Women empowerment", "Series", "7.9/10", "SonyLIV"),
+        CatalogItem("Sachin: A Billion Dreams", "Sports, Biographical, History", "Documentary", "8.5/10", "SonyLIV"),
+
+        // ZEE5
+        CatalogItem("Sunflower", "Comedy, Crime, Mystery", "Series", "8.0/10", "ZEE5"),
+        CatalogItem("Sirf Ek Bandaa Kaafi Hai", "Drama, Courtroom, Battle", "Movie", "8.9/10", "ZEE5"),
+        CatalogItem("Taj: Divided by Blood", "History, Royal Drama, War", "Series", "7.0/10", "ZEE5"),
+        CatalogItem("Pitchers", "Drama, Comedy, Startup life", "Series", "9.1/10", "ZEE5"),
+        CatalogItem("Bob Biswas", "Thriller, Crime, Mystery", "Movie", "6.7/10", "ZEE5"),
+        CatalogItem("Kargil: Valour of Army", "Military, Biography, Patriotic", "Documentary", "8.2/10", "ZEE5")
     )
 
-    val primeCatalog = listOf(
-        CatalogItem("The Boys", "Action, Sci-Fi • Series", "8.7/10"),
-        CatalogItem("Inception", "Sci-Fi, Action • Movie", "8.8/10"),
-        CatalogItem("The Rings of Power", "Fantasy • Series", "7.0/10"),
-        CatalogItem("Road House", "Action, Thriller • Movie", "6.2/10"),
-        CatalogItem("Fleabag", "Comedy • Series", "8.7/10")
-    )
+    val platforms = listOf("All", "Netflix", "Prime Video", "Jio Hotstar", "SonyLIV", "ZEE5")
+    val types = listOf("All", "Movie", "Series", "Documentary")
 
-    val hotstarCatalog = listOf(
-        CatalogItem("Sholay", "Classic, Action • Movie", "8.2/10"),
-        CatalogItem("Chhichhore", "Drama, Comedy • Movie", "8.3/10"),
-        CatalogItem("Loki", "Fantasy, Sci-Fi • Series", "8.2/10"),
-        CatalogItem("Chon Chon", "Historical, Action • Movie", "7.9/10"),
-        CatalogItem("Special Ops", "Spy, Action • Series", "8.6/10")
-    )
-
-    val selectedCatalog = when (platformTabIndex) {
-        0 -> netflixCatalog
-        1 -> primeCatalog
-        else -> hotstarCatalog
+    val filteredCatalog = allCatalog.filter { item ->
+        val matchesPlatform = selectedPlatform == "All" || item.platform == selectedPlatform
+        val matchesType = selectedType == "All" || item.type == selectedType
+        matchesPlatform && matchesType
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
-            "Streaming Libraries",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
+            text = "Trending Catalog Hub",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.ExtraBold,
             color = Color.White
         )
         Text(
-            "Inspect popular listings to auto-fetch critical intelligence metrics instantly.",
+            text = "Explore trending movies, series, and documentaries dynamically sorted across major networks.",
             fontSize = 11.sp,
-            color = Color(0xFF8B8894)
+            color = Color(0xFF8B8894),
+            modifier = Modifier.padding(bottom = 12.dp)
         )
 
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Platform sub tabs
-        Row(
+        // Platform Filter Row
+        Text(
+            text = "NETWORK OUTLETS",
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFFFC629),
+            letterSpacing = 0.5.sp,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        LazyRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            PlatformBadgeButton("Netflix", active = platformTabIndex == 0, color = Color(0xFFE50914), activeTextColor = Color.White, onClick = { platformTabIndex = 0 }, modifier = Modifier.weight(1f))
-            PlatformBadgeButton("Prime Video", active = platformTabIndex == 1, color = Color(0xFF00A8E1), activeTextColor = Color.White, onClick = { platformTabIndex = 1 }, modifier = Modifier.weight(1f))
-            PlatformBadgeButton("Jio Hotstar", active = platformTabIndex == 2, color = Color(0xFFFFC629), activeTextColor = Color.Black, onClick = { platformTabIndex = 2 }, modifier = Modifier.weight(1f))
+            items(platforms) { platform ->
+                val active = selectedPlatform == platform
+                val activeColor = when (platform) {
+                    "Netflix" -> Color(0xFFE50914)
+                    "Prime Video" -> Color(0xFF00A8E1)
+                    "Jio Hotstar" -> Color(0xFFFFC629)
+                    "SonyLIV" -> Color(0xFFE25C3E)
+                    "ZEE5" -> Color(0xFF8E24AA)
+                    else -> Color(0xFFFFC529)
+                }
+                val activeTextCol = if (platform == "Jio Hotstar" || (platform == "All" && active)) Color.Black else Color.White
+                PlatformBadgeButton(
+                    title = platform,
+                    active = active,
+                    color = activeColor,
+                    activeTextColor = activeTextCol,
+                    onClick = { selectedPlatform = platform }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Content Type Filter Row
+        Text(
+            text = "CONTENT TYPE",
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFFFC629),
+            letterSpacing = 0.5.sp,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(types) { cType ->
+                val active = selectedType == cType
+                val label = when (cType) {
+                    "Series" -> "TV Series"
+                    "Movie" -> "Movies"
+                    "Documentary" -> "Documentaries"
+                    else -> "All Types"
+                }
+                PlatformBadgeButton(
+                    title = label,
+                    active = active,
+                    color = Color(0xFF1F1C25),
+                    activeTextColor = Color(0xFFFFC529),
+                    onClick = { selectedType = cType }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            items(selectedCatalog) { movie ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onMovieSelect(movie.title) },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF121015)),
-                    border = BorderStroke(1.dp, Color(0xFF1E1C24)),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Row(
+        if (filteredCatalog.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF121015))
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No matching titles found in this filter combination.", color = Color(0xFF8B8894), fontSize = 12.sp)
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(filteredCatalog) { movie ->
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .clickable { onMovieSelect(movie.title) },
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B191F)),
+                        border = BorderStroke(1.dp, Color(0xFF2C2933)),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xFF1B191F)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Movie,
-                                    contentDescription = "Movie card",
-                                    tint = Color.LightGray,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(movie.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                Text(movie.genre, fontSize = 11.sp, color = Color(0xFF8B8894))
-                            }
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        Column(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF1B191F))
-                                .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .fillMaxWidth()
+                                .padding(14.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Star,
-                                contentDescription = "Score logo",
-                                tint = Color(0xFFFFC629),
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = movie.score,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFF2C2933)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        val icon = when (movie.type) {
+                                            "Movie" -> Icons.Default.Movie
+                                            "Series" -> Icons.Default.Tv
+                                            else -> Icons.Default.TrendingUp
+                                        }
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = "Movie card logo",
+                                            tint = Color.LightGray,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = movie.title,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Color(0xFF2C2933))
+                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = movie.type.uppercase(),
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFFFFC629)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = "${movie.genre}  •  On ${movie.platform}",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF8B8894)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Rotten Tomatoes styled rating stats
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                val baseNum = movie.score.replace("/10", "").toDoubleOrNull() ?: 7.5
+                                val criticPercentage = (baseNum * 10 + 6).coerceIn(40.0, 99.0).toInt()
+                                val audiencePercentage = (baseNum * 10 + 2).coerceIn(45.0, 98.0).toInt()
+
+                                // Critics (Tomato)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .clip(CircleShape)
+                                            .background(if (criticPercentage >= 60) Color(0xFFFF385C) else Color(0xFF4CAF50)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(4.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.White)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "$criticPercentage%",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Tomatometer", fontSize = 10.sp, color = Color(0xFF8B8894))
+                                }
+
+                                // Audience (Popcorn)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp, bottomStart = 4.dp, bottomEnd = 4.dp))
+                                            .background(Color(0xFFFFC629)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(5.dp)
+                                                .align(Alignment.TopCenter)
+                                                .background(Color(0xFFE50914))
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "$audiencePercentage%",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Audience", fontSize = 10.sp, color = Color(0xFF8B8894))
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            item {
-                Spacer(modifier = Modifier.height(20.dp))
+                item {
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
             }
         }
     }
@@ -1081,7 +1701,7 @@ fun PlatformBadgeButton(
             .background(if (active) color else Color(0xFF121015))
             .border(1.dp, if (active) Color.Transparent else Color(0xFF1E1C24), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -1096,7 +1716,9 @@ fun PlatformBadgeButton(
 data class CatalogItem(
     val title: String,
     val genre: String,
-    val score: String
+    val type: String, // "Movie", "Series", "Documentary"
+    val score: String,
+    val platform: String
 )
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
