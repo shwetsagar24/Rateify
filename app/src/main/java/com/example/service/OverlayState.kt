@@ -1,6 +1,7 @@
 package com.example.service
 
 import com.example.network.MovieRatingResult
+import com.example.network.GeminiClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -16,6 +17,12 @@ object OverlayState {
 
     private val _ratingResult = MutableStateFlow<MovieRatingResult?>(null)
     val ratingResult = _ratingResult.asStateFlow()
+
+    private val _overlayCandidates = MutableStateFlow<List<GeminiClient.CandidateWithScore>>(emptyList())
+    val overlayCandidates = _overlayCandidates.asStateFlow()
+
+    private val _showCandidateSelection = MutableStateFlow(false)
+    val showCandidateSelection = _showCandidateSelection.asStateFlow()
 
     private val _isOverlayLoading = MutableStateFlow(false)
     val isOverlayLoading = _isOverlayLoading.asStateFlow()
@@ -44,6 +51,14 @@ object OverlayState {
 
     fun setRatingResult(result: MovieRatingResult?) {
         _ratingResult.value = result
+    }
+
+    fun setOverlayCandidates(candidates: List<GeminiClient.CandidateWithScore>) {
+        _overlayCandidates.value = candidates
+    }
+
+    fun setShowCandidateSelection(show: Boolean) {
+        _showCandidateSelection.value = show
     }
 
     fun setOverlayLoading(loading: Boolean) {

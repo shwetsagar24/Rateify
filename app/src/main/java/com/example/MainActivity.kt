@@ -15,6 +15,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,6 +34,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -69,7 +71,7 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    containerColor = Color(0xFF0D0C0E) // Custom deep cinematic black
+                    containerColor = Color(0xFF0A0A1A)
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         MovieRatingsScreen()
@@ -111,7 +113,7 @@ fun MovieRatingsScreen(
     val activeStreamingApp by OverlayState.currentStreamingApp.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
-    var activeTab by remember { mutableStateOf(0) } // 0: Search & Settings, 1: Platform Hub
+    var activeTab by remember { mutableStateOf(0) } // 0: Catalog Hub, 1: Search & Setup
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     // Ambient glow animation for active streaming tracker status
@@ -130,12 +132,11 @@ fun MovieRatingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .drawBehind {
-                // Highly elegant subtle amber/rose background radial flare
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x19FFC529), Color.Transparent)
+                        colors = listOf(Color(0x1AFA320A), Color.Transparent) // Dark red flare
                     ),
-                    radius = 450.dp.toPx(),
+                    radius = 500.dp.toPx(),
                     center = Offset(size.width / 2f, -100f)
                 )
             }
@@ -154,37 +155,27 @@ fun MovieRatingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
+                    Image(
+                        painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_rateify_logo),
+                        contentDescription = "Rateify AI Logo",
                         modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(Color(0xFFFFC529), Color(0xFFE50914))
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Movie,
-                            contentDescription = "Movie ratings logo",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    )
                     Spacer(modifier = Modifier.width(14.dp))
                     Column {
                         Text(
                             text = "Rateify AI",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Bold,
                             color = Color.White,
                             letterSpacing = (-0.5).sp
                         )
                         Text(
                             text = "Real-time overlay scanner",
                             fontSize = 11.sp,
-                            color = Color(0xFF8B8894),
+                            color = Color(0xFF9E9E9E),
                             fontWeight = FontWeight.Medium
                         )
                     }
@@ -194,52 +185,54 @@ fun MovieRatingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Interactive Quick HUD controller pill
                     val overlayActive by OverlayState.isOverlayVisible.collectAsState()
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(30.dp))
-                            .background(Color(0xFF131116))
-                            .border(1.dp, Color(0xFF222027), RoundedCornerShape(30.dp))
-                            .clickable {
+                    // Sleek live-scanning indicator
+                    if (overlayActive) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(30.dp))
+                                .background(Color.Transparent)
+                                .clickable {
+                                    triggerOverlay(context, FloatingOverlayService.ACTION_HIDE)
+                                    Toast.makeText(context, "Overlay Suspended", Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFE8003D).copy(alpha = pulseAlpha))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "LIVE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE8003D),
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
                                 if (isOverlayGranted) {
-                                    val isServiceActive = OverlayState.isOverlayVisible.value
-                                    val action = if (isServiceActive) {
-                                        FloatingOverlayService.ACTION_HIDE
-                                    } else {
-                                        FloatingOverlayService.ACTION_SHOW
-                                    }
-                                    triggerOverlay(context, action)
-                                    Toast.makeText(
-                                        context,
-                                        if (isServiceActive) "Overlay Suspended" else "Overlay Activated",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    triggerOverlay(context, FloatingOverlayService.ACTION_SHOW)
+                                    Toast.makeText(context, "Overlay Activated", Toast.LENGTH_SHORT).show()
                                 } else {
                                     Toast.makeText(context, "Please grant Overlay permission below", Toast.LENGTH_LONG).show()
                                 }
-                            }
-                            .testTag("toggle_overlay_quick")
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (overlayActive) Color(0xFF10B981).copy(alpha = pulseAlpha)
-                                    else Color(0xFF4A4950)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (overlayActive) "HUD ONLINE" else "HUD PAUSED",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (overlayActive) Color(0xFF10B981) else Color(0xFF8B8894),
-                            letterSpacing = 0.5.sp
-                        )
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayCircleOutline,
+                                contentDescription = "Start LIVE",
+                                tint = Color(0xFF9E9E9E),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
 
                     // Settings Icon
@@ -248,15 +241,15 @@ fun MovieRatingsScreen(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF131116))
-                            .border(1.dp, Color(0xFF222027), CircleShape)
+                            .background(Color.Transparent)
+                            .border(1.dp, Color(0xFF2A2A2A), CircleShape)
                             .testTag("open_settings_icon")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Settings",
                             tint = Color.White,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -269,7 +262,7 @@ fun MovieRatingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF121015))
+                    .background(Color(0xFF12121F))
                     .border(1.dp, Color(0xFF1E1C24), RoundedCornerShape(16.dp))
                     .padding(4.dp)
             ) {
@@ -277,21 +270,21 @@ fun MovieRatingsScreen(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (activeTab == 0) Color(0xFF1F1C25) else Color.Transparent)
+                        .background(if (activeTab == 0) Color(0xFF12121F) else Color.Transparent)
                         .clickable { activeTab = 0 }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Search & Setup Icon",
-                            tint = if (activeTab == 0) Color(0xFFFFC529) else Color(0xFF8B8894),
+                            imageVector = Icons.Default.Movie,
+                            contentDescription = "Platforms Icon",
+                            tint = if (activeTab == 0) Color(0xFF8B2FC9) else Color(0xFF8B8894),
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Search & Setup",
+                            text = "Catalog Hub",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (activeTab == 0) Color.White else Color(0xFF8B8894)
@@ -302,21 +295,21 @@ fun MovieRatingsScreen(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (activeTab == 1) Color(0xFF1F1C25) else Color.Transparent)
+                        .background(if (activeTab == 1) Color(0xFF12121F) else Color.Transparent)
                         .clickable { activeTab = 1 }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Movie,
-                            contentDescription = "Platforms Icon",
-                            tint = if (activeTab == 1) Color(0xFFFFC529) else Color(0xFF8B8894),
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Search & Setup Icon",
+                            tint = if (activeTab == 1) Color(0xFF8B2FC9) else Color(0xFF8B8894),
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Catalog Hub",
+                            text = "Search & Setup",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (activeTab == 1) Color.White else Color(0xFF8B8894)
@@ -328,6 +321,13 @@ fun MovieRatingsScreen(
             Spacer(modifier = Modifier.height(18.dp))
 
             if (activeTab == 0) {
+                CuratedPlatformCatalog(
+                    onMovieSelect = { title ->
+                        viewModel.searchMovie(title)
+                        activeTab = 1
+                    }
+                )
+            } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -340,7 +340,7 @@ fun MovieRatingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = Color(0xFF121015),
+                                    containerColor = Color(0xFF12121F),
                                     contentColor = Color.White
                                 ),
                                 border = BorderStroke(1.dp, Color(0xFF1E1C24))
@@ -412,7 +412,7 @@ fun MovieRatingsScreen(
                             modifier = Modifier.fillMaxWidth().testTag("gemini_key_card"),
                             shape = RoundedCornerShape(20.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFF121015),
+                                containerColor = Color(0xFF12121F),
                                 contentColor = Color.White
                             ),
                             border = BorderStroke(1.dp, Color(0xFF1E1C24))
@@ -425,7 +425,7 @@ fun MovieRatingsScreen(
                                     Icon(
                                         imageVector = Icons.Default.VpnKey,
                                         contentDescription = "Gemini Key Icon",
-                                        tint = Color(0xFFFFC529),
+                                        tint = Color(0xFF8B2FC9),
                                         modifier = Modifier.size(20.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
@@ -465,7 +465,7 @@ fun MovieRatingsScreen(
                                             }
                                         },
                                         colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = Color(0xFFFFC529),
+                                            focusedBorderColor = Color(0xFF8B2FC9),
                                             unfocusedBorderColor = Color(0xFF1E1C24),
                                             focusedContainerColor = Color(0xFF0D0C0E),
                                             unfocusedContainerColor = Color(0xFF0D0C0E),
@@ -497,7 +497,7 @@ fun MovieRatingsScreen(
                                                 isEditingKey = false
                                                 Toast.makeText(context, "Gemini API Key Saved!", Toast.LENGTH_SHORT).show()
                                             },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC529), contentColor = Color.Black),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B2FC9), contentColor = Color.Black),
                                             shape = RoundedCornerShape(10.dp)
                                         ) {
                                             Text("Save & Connect", fontWeight = FontWeight.Bold)
@@ -560,65 +560,12 @@ fun MovieRatingsScreen(
                                                 Icon(
                                                     imageVector = Icons.Default.Edit,
                                                     contentDescription = "Edit key",
-                                                    tint = Color(0xFFFFC529)
+                                                    tint = Color(0xFF8B2FC9)
                                                 )
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    // SEARCH CONTROLLER INPUT BAR
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                placeholder = { Text("Search title (e.g. Stranger Things)...", color = Color(0xFF63616B), fontSize = 14.sp) },
-                                singleLine = true,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("movie_search_input"),
-                                shape = RoundedCornerShape(16.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = Color(0xFFFFC529),
-                                    unfocusedBorderColor = Color(0xFF1E1C24),
-                                    focusedContainerColor = Color(0xFF121015),
-                                    unfocusedContainerColor = Color(0xFF121015),
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White
-                                ),
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.Search,
-                                        contentDescription = "Search icon",
-                                        tint = Color(0xFF8B8894)
-                                    )
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Button(
-                                modifier = Modifier
-                                    .height(56.dp)
-                                    .testTag("movie_search_button"),
-                                onClick = {
-                                    if (searchQuery.isNotBlank()) {
-                                        viewModel.searchMovie(searchQuery)
-                                        searchQuery = ""
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFFFC529),
-                                    contentColor = Color.Black
-                                ),
-                                shape = RoundedCornerShape(16.dp)
-                            ) {
-                                Text("Fetch", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -677,7 +624,7 @@ fun MovieRatingsScreen(
                                     Card(
                                         modifier = Modifier.fillMaxWidth(),
                                         shape = RoundedCornerShape(20.dp),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF121015)),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
                                         border = BorderStroke(1.dp, Color(0xFF1E1C24))
                                     ) {
                                         Column(
@@ -686,7 +633,7 @@ fun MovieRatingsScreen(
                                                 .padding(28.dp),
                                             horizontalAlignment = Alignment.CenterHorizontally
                                         ) {
-                                            CircularProgressIndicator(color = Color(0xFFFFC529), strokeWidth = 3.dp)
+                                            CircularProgressIndicator(color = Color(0xFF8B2FC9), strokeWidth = 3.dp)
                                             Spacer(modifier = Modifier.height(14.dp))
                                             Text(
                                                 "Synthesizing public reviews...",
@@ -707,11 +654,20 @@ fun MovieRatingsScreen(
                                     val movie = (searchUiState as SearchUiState.Success).movie
                                     MovieReviewDetailCard(movie = movie, onClose = { viewModel.resetSearchState() })
                                 }
+                                is SearchUiState.SelectCandidate -> {
+                                    val state = searchUiState as SearchUiState.SelectCandidate
+                                    MovieSelectionCard(
+                                        query = state.query,
+                                        candidates = state.candidates,
+                                        onSelect = { imdbId, title, year -> viewModel.fetchAndShowMovieById(imdbId, title, year) },
+                                        onCancel = { viewModel.resetSearchState() }
+                                    )
+                                }
                                 is SearchUiState.Error -> {
                                     val msg = (searchUiState as SearchUiState.Error).message
                                     Card(
                                         modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF201314)),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
                                         shape = RoundedCornerShape(20.dp),
                                         border = BorderStroke(1.dp, Color(0xFF3F1A1B))
                                     ) {
@@ -770,7 +726,7 @@ fun MovieRatingsScreen(
                                 item = historyItem,
                                 onClick = {
                                     viewModel.selectCachedMovie(historyItem)
-                                    activeTab = 0
+                                    activeTab = 1
                                 },
                                 onDelete = { viewModel.deleteHistoryItem(historyItem.id) }
                             )
@@ -781,7 +737,7 @@ fun MovieRatingsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFF121015))
+                                    .background(Color(0xFF12121F))
                                     .border(1.dp, Color(0xFF1E1C24), RoundedCornerShape(16.dp))
                                     .padding(28.dp),
                                 contentAlignment = Alignment.Center
@@ -800,14 +756,6 @@ fun MovieRatingsScreen(
                         Spacer(modifier = Modifier.height(20.dp))
                     }
                 }
-            } else {
-                // CURATED STREAM CHANNELS LISTING
-                CuratedPlatformCatalog(
-                    onMovieSelect = { title ->
-                        viewModel.searchMovie(title)
-                        activeTab = 0
-                    }
-                )
             }
         }
     }
@@ -827,7 +775,7 @@ fun MovieRatingsScreen(
                     Icon(
                         imageVector = Icons.Default.Settings,
                         contentDescription = "Settings Icon",
-                        tint = Color(0xFFFFC529),
+                        tint = Color(0xFF8B2FC9),
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
@@ -858,7 +806,7 @@ fun MovieRatingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF1B191F),
+                            containerColor = Color(0xFF12121F),
                             contentColor = Color.White
                         ),
                         border = BorderStroke(1.dp, Color(0xFF2C2933))
@@ -914,7 +862,7 @@ fun MovieRatingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF1B191F),
+                            containerColor = Color(0xFF12121F),
                             contentColor = Color.White
                         ),
                         border = BorderStroke(1.dp, Color(0xFF2C2933))
@@ -926,7 +874,7 @@ fun MovieRatingsScreen(
                                 Icon(
                                     imageVector = Icons.Default.VpnKey,
                                     contentDescription = "Key Icon",
-                                    tint = Color(0xFFFFC529),
+                                    tint = Color(0xFF8B2FC9),
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -965,7 +913,7 @@ fun MovieRatingsScreen(
                                         }
                                     },
                                     colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = Color(0xFFFFC529),
+                                        focusedBorderColor = Color(0xFF8B2FC9),
                                         unfocusedBorderColor = Color(0xFF2C2933),
                                         focusedContainerColor = Color(0xFF0D0C0E),
                                         unfocusedContainerColor = Color(0xFF0D0C0E),
@@ -990,7 +938,7 @@ fun MovieRatingsScreen(
                                             isEditingKey = false
                                             Toast.makeText(context, "API Key Saved!", Toast.LENGTH_SHORT).show()
                                         },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC529), contentColor = Color.Black),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B2FC9), contentColor = Color.Black),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
                                         Text("Save", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -1025,7 +973,7 @@ fun MovieRatingsScreen(
                                         Icon(
                                             imageVector = Icons.Default.Edit,
                                             contentDescription = "Edit Key",
-                                            tint = Color(0xFFFFC529),
+                                            tint = Color(0xFF8B2FC9),
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -1039,10 +987,10 @@ fun MovieRatingsScreen(
                 TextButton(
                     onClick = { showSettingsDialog = false }
                 ) {
-                    Text("Close", color = Color(0xFFFFC529), fontWeight = FontWeight.ExtraBold)
+                    Text("Close", color = Color(0xFF8B2FC9), fontWeight = FontWeight.ExtraBold)
                 }
             },
-            containerColor = Color(0xFF121015),
+            containerColor = Color(0xFF12121F),
             shape = RoundedCornerShape(24.dp)
         )
     }
@@ -1085,12 +1033,12 @@ fun PermissionStatusRow(
         if (!granted) {
             Button(
                 onClick = onGrantClick,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F1C25)),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF12121F)),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                 shape = RoundedCornerShape(10.dp),
                 border = BorderStroke(1.dp, Color(0xFF2C2933))
             ) {
-                Text("Configure", fontSize = 11.sp, color = Color(0xFFFFC629), fontWeight = FontWeight.Bold)
+                Text("Configure", fontSize = 11.sp, color = Color(0xFF8B2FC9), fontWeight = FontWeight.Bold)
             }
         } else {
             Box(
@@ -1112,6 +1060,184 @@ fun PermissionStatusRow(
 }
 
 @Composable
+fun MovieSelectionCard(
+    query: String,
+    candidates: List<com.example.network.GeminiClient.CandidateWithScore>,
+    onSelect: (String, String, String) -> Unit,
+    onCancel: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("movie_selection_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF12121F),
+            contentColor = Color.White
+        ),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, Color(0xFF2A2832))
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Multiple Matches Found",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "We found multiple results for \"$query\". Please choose the correct title below:",
+                        fontSize = 12.sp,
+                        color = Color(0xFF8B8894)
+                    )
+                }
+                IconButton(
+                    onClick = onCancel,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF12121F))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Cancel selection",
+                        tint = Color.LightGray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Candidates List
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                candidates.forEach { entry ->
+                    val candidate = entry.candidate
+                    val score = entry.score
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(candidate.imdbID ?: "", candidate.Title ?: "", candidate.Year ?: "") }
+                            .testTag("candidate_item_${candidate.imdbID}"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF12121F)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFF2A2832))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Poster Column
+                            val posterUrl = candidate.Poster
+                            if (!posterUrl.isNullOrBlank() && posterUrl != "N/A") {
+                                coil.compose.AsyncImage(
+                                    model = posterUrl,
+                                    contentDescription = "Poster of ${candidate.Title}",
+                                    modifier = Modifier
+                                        .width(50.dp)
+                                        .height(75.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color.DarkGray),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .width(50.dp)
+                                        .height(75.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(0xFF25222E)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Movie,
+                                        contentDescription = "No image available",
+                                        tint = Color(0xFF8B8894),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.width(14.dp))
+                            
+                            // Info Column
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = candidate.Title ?: "N/A",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0xFF8B2FC9).copy(alpha = 0.15f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = (candidate.Type ?: "N/A").uppercase(),
+                                            fontSize = 9.sp,
+                                            color = Color(0xFF8B2FC9),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        text = "Year: ${candidate.Year ?: "N/A"}",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF8B8894)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Source ID: ${candidate.imdbID ?: "N/A"}",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF6C6975),
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            
+                            Spacer(modifier = Modifier.width(10.dp))
+                            
+                            // Score Column
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "Match Score",
+                                    fontSize = 9.sp,
+                                    color = Color(0xFF8B8894)
+                                )
+                                Text(
+                                    text = "$score%",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (score >= 70) Color(0xFF10B981) else Color(0xFF8B2FC9)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun MovieReviewDetailCard(
     movie: MovieRatingEntity,
     onClose: () -> Unit
@@ -1119,7 +1245,7 @@ fun MovieReviewDetailCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF121015),
+            containerColor = Color(0xFF12121F),
             contentColor = Color.White
         ),
         shape = RoundedCornerShape(20.dp),
@@ -1145,7 +1271,7 @@ fun MovieReviewDetailCard(
                     Text(
                         text = "Year: ${movie.year}  |  Director: ${movie.director}",
                         fontSize = 11.sp,
-                        color = Color(0xFFFFC629),
+                        color = Color(0xFF8B2FC9),
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
@@ -1160,7 +1286,7 @@ fun MovieReviewDetailCard(
                     modifier = Modifier
                         .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF1F1C25))
+                        .background(Color(0xFF12121F))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close, 
@@ -1173,28 +1299,76 @@ fun MovieReviewDetailCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // CRITICS RATINGS GRID
+            // ENRICHED MULTI-SOURCE RATINGS GRID (IMDb, Tomatometer, RT Audience)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                RatingIndicatorWidget(
-                    title = "IMDb SCORE", 
-                    score = movie.imdb, 
-                    logoColor = Color(0xFFFFC629), 
+                EnrichedRatingWidget(
+                    title = "IMDb SCORE",
+                    score = movie.imdb,
+                    votes = if (movie.imdbVotes != "N/A" && movie.imdbVotes.isNotBlank()) "${movie.imdbVotes} votes" else "N/A",
+                    logoColor = Color(0xFF8B2FC9),
                     icon = Icons.Default.Star,
                     modifier = Modifier.weight(1f)
                 )
-                RatingIndicatorWidget(
-                    title = "TOMATOMETER", 
-                    score = movie.rottenTomatoes, 
-                    logoColor = Color(0xFFE50914), 
+                EnrichedRatingWidget(
+                    title = "TOMATOMETER",
+                    score = movie.rottenTomatoes,
+                    votes = if (movie.tomatoReviews != "N/A" && movie.tomatoReviews.isNotBlank()) "${movie.tomatoReviews} reviews" else "N/A",
+                    logoColor = Color(0xFFE50914),
                     icon = Icons.Default.Favorite,
+                    status = movie.tomatoImage,
                     modifier = Modifier.weight(1f)
                 )
+                if (movie.tomatoUserMeter != "N/A" && movie.tomatoUserMeter.isNotBlank()) {
+                    EnrichedRatingWidget(
+                        title = "RT AUDIENCE",
+                        score = movie.tomatoUserMeter,
+                        votes = if (movie.tomatoUserReviews != "N/A" && movie.tomatoUserReviews.isNotBlank()) "${movie.tomatoUserReviews} ratings" else "N/A",
+                        logoColor = Color(0xFF2196F3),
+                        icon = Icons.Default.Group,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // COGNITIVE CONSENSUS GAP INDICATOR
+            val tmClean = movie.rottenTomatoes.replace("%", "").trim().toIntOrNull()
+            val tumClean = movie.tomatoUserMeter.replace("%", "").trim().toIntOrNull()
+            if (tmClean != null && tumClean != null) {
+                val gap = tumClean - tmClean
+                val absGap = kotlin.math.abs(gap)
+                if (absGap >= 8) {
+                    val message = when {
+                        gap > 0 -> "Mainstream gap found: Audience favored this more than critics (+$absGap% Gap). Highly entertaining!"
+                        else -> "Mainstream gap found: Critics scored this higher than general audiences (-$absGap% Gap). Strong auteur/artistic appeal!"
+                    }
+                    val accentColor = if (gap > 0) Color(0xFF4CAF50) else Color(0xFF8B2FC9)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(accentColor.copy(alpha = 0.12f))
+                            .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.TrendingUp, contentDescription = "Gap Indicator", tint = accentColor, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = message,
+                            fontSize = 11.sp,
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = 15.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
 
             // STREAMING AVAILABILITY
             Text("Streaming Outlets Supported", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894), letterSpacing = 0.5.sp)
@@ -1205,7 +1379,7 @@ fun MovieReviewDetailCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFF1F1C25))
+                            .background(Color(0xFF12121F))
                             .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(8.dp))
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
@@ -1217,10 +1391,10 @@ fun MovieReviewDetailCard(
                         val color = when (trimmed) {
                             "Netflix" -> Color(0xFFE50914)
                             "Prime Video" -> Color(0xFF00A8E1)
-                            "Hotstar", "Jio Hotstar" -> Color(0xFFFFC629)
+                            "Hotstar", "Jio Hotstar" -> Color(0xFF8B2FC9)
                             "SonyLIV" -> Color(0xFFE25C3E)
                             "ZEE5" -> Color(0xFF8E24AA)
-                            else -> Color(0xFF1F1C25)
+                            else -> Color(0xFF12121F)
                         }
                         val textCol = if (trimmed == "Hotstar" || trimmed == "Jio Hotstar") Color.Black else Color.White
                         Box(
@@ -1250,12 +1424,58 @@ fun MovieReviewDetailCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // GEMINI CRITIC SUMMARIES
+            // DUAL SENTIMENT ANALYSIS SYNTHESES (CRITICS & AUDIENCE)
+            if ((movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) || 
+                (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank())) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF16141A))
+                        .border(1.dp, Color(0xFF25222B), RoundedCornerShape(14.dp))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        "Rateify AI Sentiment Synthesis", 
+                        fontSize = 11.sp, 
+                        fontWeight = FontWeight.Bold, 
+                        color = Color(0xFF8B2FC9), 
+                        letterSpacing = 0.5.sp
+                    )
+                    
+                    if (movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row {
+                            Icon(imageVector = Icons.Default.Newspaper, contentDescription = null, tint = Color(0xFFE50914), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("Critic Consensus Summary (RT Critics)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894))
+                                Text(movie.criticConsensus, fontSize = 11.sp, color = Color.LightGray, lineHeight = 16.sp)
+                            }
+                        }
+                    }
+
+                    if (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row {
+                            Icon(imageVector = Icons.Default.People, contentDescription = null, tint = Color(0xFF2196F3), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("What Audiences Say (IMDb/RT Users)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894))
+                                Text(movie.audienceConsensus, fontSize = 11.sp, color = Color.LightGray, lineHeight = 16.sp)
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // GEMINI CRITIC DETAILED CONTEXT SUMMARIES
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xFF1B191F))
+                    .background(Color(0xFF12121F))
                     .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(14.dp))
                     .padding(14.dp)
             ) {
@@ -1282,29 +1502,67 @@ fun MovieReviewDetailCard(
 }
 
 @Composable
-fun RatingIndicatorWidget(
+fun TomatoBadge(status: String) {
+    val clean = status.trim().lowercase()
+    if (clean == "n/a" || clean.isBlank()) return
+    val (color, text, icon) = when {
+        clean.contains("certified") -> Triple(Color(0xFFE50914), "Certified", Icons.Default.Verified)
+        clean.contains("fresh") -> Triple(Color(0xFFEF5350), "Fresh", Icons.Default.CheckCircle)
+        clean.contains("rotten") -> Triple(Color(0xFF4CAF50), "Rotten", Icons.Default.Cancel)
+        else -> return
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(top = 4.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(color.copy(alpha = 0.15f))
+            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 5.dp, vertical = 2.dp)
+    ) {
+        Icon(imageVector = icon, contentDescription = text, tint = color, modifier = Modifier.size(10.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(text, fontSize = 8.sp, color = Color.White, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun EnrichedRatingWidget(
     title: String,
     score: String,
+    votes: String,
     logoColor: Color,
     icon: ImageVector,
+    status: String? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF1B191F))
+            .background(Color(0xFF12121F))
             .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(14.dp))
-            .padding(12.dp),
+            .padding(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             Icon(imageVector = icon, contentDescription = title, tint = logoColor, modifier = Modifier.size(12.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text(title, fontSize = 9.sp, color = Color(0xFF8B8894), fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
         }
         Spacer(modifier = Modifier.height(6.dp))
-        Text(score, fontSize = 18.sp, color = logoColor, fontWeight = FontWeight.ExtraBold)
+        Text(score, fontSize = 16.sp, color = logoColor, fontWeight = FontWeight.ExtraBold)
+        if (votes.isNotBlank() && votes != "N/A") {
+            Text(
+                text = votes,
+                fontSize = 8.sp,
+                color = Color.LightGray,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+        status?.let {
+            TomatoBadge(status = it)
+        }
     }
 }
 
@@ -1318,7 +1576,7 @@ fun HistoryRatingRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF121015)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
         shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, Color(0xFF1E1C24))
     ) {
@@ -1332,7 +1590,7 @@ fun HistoryRatingRow(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF1B191F))
+                    .background(Color(0xFF12121F))
                     .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
@@ -1340,7 +1598,7 @@ fun HistoryRatingRow(
                     text = item.imdb.take(3),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFFFC629)
+                    color = Color(0xFF8B2FC9)
                 )
             }
 
@@ -1356,7 +1614,7 @@ fun HistoryRatingRow(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF1F1C25))
+                    .background(Color(0xFF12121F))
             ) {
                 Icon(
                     imageVector = Icons.Default.Delete, 
@@ -1369,10 +1627,41 @@ fun HistoryRatingRow(
     }
 }
 
+data class ChipColor(val bg: Color, val text: Color)
+
+val platformColors = mapOf(
+    "All" to ChipColor(Color(0xFFFFFFFF), Color(0xFF000000)),
+    "Netflix" to ChipColor(Color(0xFFE50914), Color(0xFFFFFFFF)),
+    "Prime Video" to ChipColor(Color(0xFF00A8E1), Color(0xFFFFFFFF)),
+    "JioHotstar" to ChipColor(Color(0xFF1F80E0), Color(0xFFFFFFFF)),
+    "SonyLIV" to ChipColor(Color(0xFFFFD700), Color(0xFF000000)),
+    "Zee5" to ChipColor(Color(0xFF8B2FC9), Color(0xFFFFFFFF)),
+    "Disney+ Hotstar" to ChipColor(Color(0xFF1F80E0), Color(0xFFFFFFFF)),
+    "Apple TV+" to ChipColor(Color(0xFFA2AAAD), Color(0xFF000000)),
+    "Max" to ChipColor(Color(0xFF5822B4), Color(0xFFFFFFFF)),
+    "Hulu" to ChipColor(Color(0xFF1CE783), Color(0xFF000000)),
+    "YouTube Premium" to ChipColor(Color(0xFFFF0000), Color(0xFFFFFFFF)),
+    "Paramount+" to ChipColor(Color(0xFF0064FF), Color(0xFFFFFFFF)),
+    "Discovery+" to ChipColor(Color(0xFF2175D9), Color(0xFFFFFFFF)),
+    "MUBI" to ChipColor(Color(0xFF000000), Color(0xFFFFFFFF)),
+    "Aha" to ChipColor(Color(0xFFF6C700), Color(0xFF000000)),
+    "Hoichoi" to ChipColor(Color(0xFFE72744), Color(0xFFFFFFFF)),
+    "Lionsgate Play" to ChipColor(Color(0xFFFF6B00), Color(0xFFFFFFFF)),
+    "MX Player" to ChipColor(Color(0xFFFF6C00), Color(0xFFFFFFFF)),
+    "Voot" to ChipColor(Color(0xFF6C3CE1), Color(0xFFFFFFFF)),
+    "Sun NXT" to ChipColor(Color(0xFFFF4500), Color(0xFFFFFFFF)),
+    "ShemarooMe" to ChipColor(Color(0xFFE31837), Color(0xFFFFFFFF)),
+    "Kites (EPIC ON)" to ChipColor(Color(0xFF00B4D8), Color(0xFFFFFFFF)),
+    "Curiosity Stream" to ChipColor(Color(0xFF1A1A2E), Color(0xFFE94560)),
+    "DocuBay" to ChipColor(Color(0xFFFF6B35), Color(0xFFFFFFFF)),
+    "Peacock" to ChipColor(Color(0xFF000000), Color(0xFFFFFFFF))
+)
+
 @Composable
 fun CuratedPlatformCatalog(
     onMovieSelect: (String) -> Unit
 ) {
+    var searchQuery by remember { mutableStateOf("") }
     var selectedPlatform by remember { mutableStateOf("All") }
     var selectedType by remember { mutableStateOf("All") }
 
@@ -1393,51 +1682,139 @@ fun CuratedPlatformCatalog(
         CatalogItem("The Rings of Power", "Fantasy, Adventure, Drama", "Series", "7.0/10", "Prime Video"),
         CatalogItem("Road House", "Action, Thriller, Combat", "Movie", "6.2/10", "Prime Video"),
         CatalogItem("Fleabag", "Comedy, Drama, Romantic", "Series", "8.7/10", "Prime Video"),
-        CatalogItem("Val", "Biographical, Arts, Cinema", "Documentary", "7.6/10", "Prime Video"),
-        CatalogItem("One Child Nation", "History, Politics, Investigative", "Documentary", "7.5/10", "Prime Video"),
-        CatalogItem("Interstellar", "Sci-Fi, Space Travel, Drama", "Movie", "8.7/10", "Prime Video"),
 
-        // JIO HOTSTAR
-        CatalogItem("Sholay", "Classic Action, Western, Drama", "Movie", "8.2/10", "Jio Hotstar"),
-        CatalogItem("Chhichhore", "Drama, Comedy, Inspiring", "Movie", "8.3/10", "Jio Hotstar"),
-        CatalogItem("Loki", "Fantasy, Sci-Fi, Adventure", "Series", "8.2/10", "Jio Hotstar"),
-        CatalogItem("Special Ops", "Spy, Thriller, Action", "Series", "8.6/10", "Jio Hotstar"),
-        CatalogItem("Free Solo", "Extreme Sports, Adventure", "Documentary", "8.1/10", "Jio Hotstar"),
-        CatalogItem("The Beatles: Get Back", "Music, Bio, Historical", "Documentary", "9.0/10", "Jio Hotstar"),
-        CatalogItem("Guardians of the Galaxy 3", "Sci-Fi, Comedy, Adventure", "Movie", "7.9/10", "Jio Hotstar"),
+        // JIOHOTSTAR
+        CatalogItem("Sholay", "Classic Action, Western, Drama", "Movie", "8.2/10", "JioHotstar"),
+        CatalogItem("Chhichhore", "Drama, Comedy, Inspiring", "Movie", "8.3/10", "JioHotstar"),
+        CatalogItem("Loki", "Fantasy, Sci-Fi, Adventure", "Series", "8.2/10", "JioHotstar"),
+        CatalogItem("Special Ops", "Spy, Thriller, Action", "Series", "8.6/10", "JioHotstar"),
 
         // SONYLIV
         CatalogItem("Scam 1992", "Drama, Financial Crime, Biographical", "Series", "9.3/10", "SonyLIV"),
         CatalogItem("Gullak", "Comedy, Family, Heartwarming", "Series", "9.1/10", "SonyLIV"),
         CatalogItem("Rocket Boys", "Drama, Biography, Science", "Series", "8.9/10", "SonyLIV"),
-        CatalogItem("Undekhi", "Crime, Thriller, Suspense", "Series", "7.9/10", "SonyLIV"),
-        CatalogItem("Maharani", "Political, Drama, Women empowerment", "Series", "7.9/10", "SonyLIV"),
-        CatalogItem("Sachin: A Billion Dreams", "Sports, Biographical, History", "Documentary", "8.5/10", "SonyLIV"),
 
         // ZEE5
-        CatalogItem("Sunflower", "Comedy, Crime, Mystery", "Series", "8.0/10", "ZEE5"),
-        CatalogItem("Sirf Ek Bandaa Kaafi Hai", "Drama, Courtroom, Battle", "Movie", "8.9/10", "ZEE5"),
-        CatalogItem("Taj: Divided by Blood", "History, Royal Drama, War", "Series", "7.0/10", "ZEE5"),
-        CatalogItem("Pitchers", "Drama, Comedy, Startup life", "Series", "9.1/10", "ZEE5"),
-        CatalogItem("Bob Biswas", "Thriller, Crime, Mystery", "Movie", "6.7/10", "ZEE5"),
-        CatalogItem("Kargil: Valour of Army", "Military, Biography, Patriotic", "Documentary", "8.2/10", "ZEE5")
+        CatalogItem("Sunflower", "Comedy, Crime, Mystery", "Series", "8.0/10", "Zee5"),
+        CatalogItem("Sirf Ek Bandaa Kaafi Hai", "Drama, Courtroom, Battle", "Movie", "8.9/10", "Zee5"),
+        CatalogItem("Pitchers", "Drama, Comedy, Startup life", "Series", "9.1/10", "Zee5"),
+        
+        // DISNEY+ HOTSTAR
+        CatalogItem("The Mandalorian", "Sci-Fi, Adventure", "Series", "8.7/10", "Disney+ Hotstar"),
+        CatalogItem("Hamilton", "Musical, History", "Movie", "8.4/10", "Disney+ Hotstar"),
+
+        // APPLE TV+
+        CatalogItem("Ted Lasso", "Comedy, Sports, Heartwarming", "Series", "8.8/10", "Apple TV+"),
+        CatalogItem("Severance", "Sci-Fi, Thriller, Mystery", "Series", "8.7/10", "Apple TV+"),
+
+        // MAX
+        CatalogItem("Succession", "Drama, Satire", "Series", "8.9/10", "Max"),
+        CatalogItem("The Last of Us", "Action, Drama, Sci-Fi", "Series", "8.8/10", "Max"),
+
+        // HULU
+        CatalogItem("The Bear", "Comedy, Drama", "Series", "8.6/10", "Hulu"),
+        CatalogItem("Only Murders in the Building", "Comedy, Crime, Mystery", "Series", "8.1/10", "Hulu"),
+
+        // YOUTUBE PREMIUM
+        CatalogItem("Cobra Kai", "Action, Comedy, Drama", "Series", "8.5/10", "YouTube Premium"),
+        
+        // PARAMOUNT+
+        CatalogItem("Yellowstone", "Drama, Western", "Series", "8.7/10", "Paramount+"),
+        
+        // DISCOVERY+
+        CatalogItem("Planet Earth II", "Documentary, Nature", "Documentary", "9.5/10", "Discovery+"),
+        
+        // MUBI
+        CatalogItem("Perfect Days", "Drama", "Movie", "7.9/10", "MUBI"),
+        
+        // AHA
+        CatalogItem("Telugu Drama", "Action, Drama", "Movie", "7.5/10", "Aha"),
+        
+        // HOICHOI
+        CatalogItem("Byomkesh", "Detective, Mystery", "Series", "8.1/10", "Hoichoi"),
+        
+        // LIONSGATE PLAY
+        CatalogItem("John Wick: Chapter 4", "Action, Thriller", "Movie", "7.7/10", "Lionsgate Play"),
+        
+        // MX PLAYER
+        CatalogItem("Ashram", "Crime, Drama", "Series", "7.4/10", "MX Player"),
+        
+        // VOOT
+        CatalogItem("Asur", "Crime, Thriller", "Series", "8.4/10", "Voot"),
+        
+        // SUN NXT
+        CatalogItem("Doctor", "Action, Thriller, Dark Comedy", "Movie", "7.4/10", "Sun NXT"),
+
+        // SHEMAROOME
+        CatalogItem("Malgudi Days", "Classic, Drama, Nostalgia", "Series", "8.9/10", "ShemarooMe"),
+
+        // CURIOSITY STREAM
+        CatalogItem("Secrets of the Solar System", "Space, Science", "Documentary", "8.2/10", "Curiosity Stream")
     )
 
-    val platforms = listOf("All", "Netflix", "Prime Video", "Jio Hotstar", "SonyLIV", "ZEE5")
+    val platforms = listOf(
+        "All", "Netflix", "Prime Video", "JioHotstar", "Zee5", "SonyLIV", 
+        "Voot", "MX Player", "Sun NXT", "Disney+ Hotstar", "Aha", "Hoichoi", 
+        "Max", "Apple TV+", "Hulu", "YouTube Premium", "MUBI", "Paramount+", 
+        "Discovery+", "Lionsgate Play", "ShemarooMe", "Curiosity Stream"
+    )
     val types = listOf("All", "Movie", "Series", "Documentary")
 
     val filteredCatalog = allCatalog.filter { item ->
         val matchesPlatform = selectedPlatform == "All" || item.platform == selectedPlatform
         val matchesType = selectedType == "All" || item.type == selectedType
-        matchesPlatform && matchesType
+        val matchesSearch = searchQuery.isBlank() || 
+            item.title.contains(searchQuery, ignoreCase = true) || 
+            item.genre.contains(searchQuery, ignoreCase = true) || 
+            item.platform.contains(searchQuery, ignoreCase = true)
+        
+        matchesPlatform && matchesType && matchesSearch
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search movies, series...", color = Color(0xFF8A8AB0), fontSize = 14.sp) },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFF8B2FC9),
+                unfocusedBorderColor = Color(0xFF8B2FC9),
+                focusedContainerColor = Color(0xFF1E1E30),
+                unfocusedContainerColor = Color(0xFF1E1E30),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White
+            ),
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search icon",
+                    tint = Color(0xFF8A8AB0)
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Clear search",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+        )
+
         Text(
             text = "Trending Catalog Hub",
             fontSize = 18.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = Color.White
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            letterSpacing = 0.5.sp
         )
         Text(
             text = "Explore trending movies, series, and documentaries dynamically sorted across major networks.",
@@ -1449,47 +1826,53 @@ fun CuratedPlatformCatalog(
         // Platform Filter Row
         Text(
             text = "NETWORK OUTLETS",
-            fontSize = 9.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFFFC629),
+            color = Color.White,
             letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(bottom = 6.dp)
+            modifier = Modifier.padding(bottom = 8.dp)
         )
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(platforms) { platform ->
-                val active = selectedPlatform == platform
-                val activeColor = when (platform) {
-                    "Netflix" -> Color(0xFFE50914)
-                    "Prime Video" -> Color(0xFF00A8E1)
-                    "Jio Hotstar" -> Color(0xFFFFC629)
-                    "SonyLIV" -> Color(0xFFE25C3E)
-                    "ZEE5" -> Color(0xFF8E24AA)
-                    else -> Color(0xFFFFC529)
+        Box(modifier = Modifier.fillMaxWidth()) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(end = 40.dp) // Leave space for fade
+            ) {
+                items(platforms) { platform ->
+                    val active = selectedPlatform == platform
+                    val chipColor = platformColors[platform] ?: ChipColor(Color.DarkGray, Color.White)
+                    PlatformBadgeButton(
+                        title = platform,
+                        active = active,
+                        platformColor = chipColor,
+                        onClick = { selectedPlatform = platform }
+                    )
                 }
-                val activeTextCol = if (platform == "Jio Hotstar" || (platform == "All" && active)) Color.Black else Color.White
-                PlatformBadgeButton(
-                    title = platform,
-                    active = active,
-                    color = activeColor,
-                    activeTextColor = activeTextCol,
-                    onClick = { selectedPlatform = platform }
-                )
             }
+            // Fade gradient at the end
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(40.dp)
+                    .fillMaxHeight()
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Color.Transparent, Color(0xFF0A0A1A))
+                        )
+                    )
+            )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Content Type Filter Row
         Text(
             text = "CONTENT TYPE",
-            fontSize = 9.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFFFFC629),
+            color = Color.White,
             letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(bottom = 6.dp)
+            modifier = Modifier.padding(bottom = 8.dp)
         )
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
@@ -1506,8 +1889,7 @@ fun CuratedPlatformCatalog(
                 PlatformBadgeButton(
                     title = label,
                     active = active,
-                    color = Color(0xFF1F1C25),
-                    activeTextColor = Color(0xFFFFC529),
+                    platformColor = ChipColor(Color(0xFFE8003D), Color.White),
                     onClick = { selectedType = cType }
                 )
             }
@@ -1521,7 +1903,7 @@ fun CuratedPlatformCatalog(
                     .fillMaxWidth()
                     .weight(1f)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF121015))
+                    .background(Color(0xFF12121F))
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -1537,146 +1919,146 @@ fun CuratedPlatformCatalog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onMovieSelect(movie.title) },
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B191F)),
-                        border = BorderStroke(1.dp, Color(0xFF2C2933)),
-                        shape = RoundedCornerShape(12.dp)
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                        Box {
+                            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                                // Thin left border accent in red when Tomatometer is high (simulated as criticPercentage >= 60)
+                            val baseNum = movie.score.replace("/10", "").toDoubleOrNull() ?: 7.5
+                            val criticPercentage = (baseNum * 10 + 6).coerceIn(40.0, 99.0).toInt()
+                            val audiencePercentage = (baseNum * 10 + 2).coerceIn(45.0, 98.0).toInt()
+                            
+                            if (criticPercentage >= 60) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .fillMaxHeight()
+                                        .background(Color(0xFFE8003D))
+                                )
+                            }
+                            
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(14.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(Color(0xFF2C2933)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        val icon = when (movie.type) {
-                                            "Movie" -> Icons.Default.Movie
-                                            "Series" -> Icons.Default.Tv
-                                            else -> Icons.Default.TrendingUp
-                                        }
-                                        Icon(
-                                            imageVector = icon,
-                                            contentDescription = "Movie card logo",
-                                            tint = Color.LightGray,
-                                            modifier = Modifier.size(18.dp)
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = movie.title,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = movie.genre,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF9E9E9E)
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                    
+                                    Column(
+                                        horizontalAlignment = Alignment.End,
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        // Streaming Platform Badge
+                                        val platformColor = when(movie.platform) {
+                                            "Netflix" -> Color(0xFFE50914)
+                                            "Prime Video" -> Color(0xFF00A8E1)
+                                            "Jio Hotstar" -> Color(0xFF8B2FC9)
+                                            "SonyLIV" -> Color(0xFFE25C3E)
+                                            "ZEE5" -> Color(0xFF8E24AA)
+                                            else -> Color.DarkGray
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(platformColor)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
                                             Text(
-                                                text = movie.title,
-                                                fontSize = 15.sp,
+                                                text = movie.platform.uppercase(),
+                                                fontSize = 8.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color.White
                                             )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(Color(0xFF2C2933))
-                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = movie.type.uppercase(),
-                                                    fontSize = 8.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = Color(0xFFFFC629)
-                                                )
-                                            }
                                         }
-                                        Spacer(modifier = Modifier.height(2.dp))
+                                        
+                                        // Content Type Badge
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(50))
+                                                .background(Color.White.copy(alpha = 0.15f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = movie.type.uppercase(),
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // Score Layout: [🍅 93% Tomatometer] [🍿 89% Audience]
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("🍅", fontSize = 14.sp)
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "${movie.genre}  •  On ${movie.platform}",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF8B8894)
+                                            text = "$criticPercentage%",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
                                         )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Tomatometer", fontSize = 12.sp, color = Color(0xFF9E9E9E))
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("🍿", fontSize = 14.sp)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "$audiencePercentage%",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Audience", fontSize = 12.sp, color = Color(0xFF9E9E9E))
                                     }
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Rotten Tomatoes styled rating stats
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                val baseNum = movie.score.replace("/10", "").toDoubleOrNull() ?: 7.5
-                                val criticPercentage = (baseNum * 10 + 6).coerceIn(40.0, 99.0).toInt()
-                                val audiencePercentage = (baseNum * 10 + 2).coerceIn(45.0, 98.0).toInt()
-
-                                // Critics (Tomato)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .background(if (criticPercentage >= 60) Color(0xFFFF385C) else Color(0xFF4CAF50)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(4.dp)
-                                                .clip(CircleShape)
-                                                .background(Color.White)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "$criticPercentage%",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
+                        } // Closes the Row(IntrinsicSize)
+                        
+                        // Subtle gradient overlay at card bottom
+                        Box(
+                            modifier = this@Box.run { Modifier
+                                .fillMaxWidth()
+                                .height(30.dp)
+                                .align(Alignment.BottomCenter)
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.4f))
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Tomatometer", fontSize = 10.sp, color = Color(0xFF8B8894))
-                                }
-
-                                // Audience (Popcorn)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(12.dp)
-                                            .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp, bottomStart = 4.dp, bottomEnd = 4.dp))
-                                            .background(Color(0xFFFFC629)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(5.dp)
-                                                .align(Alignment.TopCenter)
-                                                .background(Color(0xFFE50914))
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "$audiencePercentage%",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Audience", fontSize = 10.sp, color = Color(0xFF8B8894))
-                                }
+                                )
                             }
-                        }
-                    }
-                }
+                        )
+                    } // Closes Box
+                } // Closes Card
+                } // Added missing closing brace for items()
 
                 item {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -1690,25 +2072,39 @@ fun CuratedPlatformCatalog(
 fun PlatformBadgeButton(
     title: String,
     active: Boolean,
-    color: Color,
-    activeTextColor: Color,
+    platformColor: ChipColor,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val borderColor = if (title == "Peacock" && active) {
+        Brush.horizontalGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Blue, Color.Magenta))
+    } else if (!active) {
+        androidx.compose.ui.graphics.SolidColor(Color(0xFF2A2A3E))
+    } else {
+        androidx.compose.ui.graphics.SolidColor(Color.Transparent)
+    }
+
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (active) color else Color(0xFF121015))
-            .border(1.dp, if (active) Color.Transparent else Color(0xFF1E1C24), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(50))
+            .background(if (active) platformColor.bg else Color(0xFF1E1E2E))
+            .border(1.dp, borderColor, RoundedCornerShape(50))
+            .then(
+                if (active) {
+                    Modifier.shadow(4.dp, RoundedCornerShape(50), ambientColor = platformColor.bg, spotColor = platformColor.bg)
+                } else {
+                    Modifier
+                }
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (active) activeTextColor else Color(0xFF8B8894)
+            fontSize = 12.sp,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+            color = if (active) platformColor.text else Color(0xFF8A8AB0)
         )
     }
 }

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M30,20 h30 c15,0,25,10,25,25 c0,15,-10,25,-25,25 h-10 v20 h-20 z M50,55 c5,0,10,-5,10,-10 c0,-5,-5,-10,-10,-10 h-10 v20 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="20"
+                android:startY="20"
+                android:endX="80"
+                android:endY="90"
+                android:type="linear">
+                <item android:color="#E8003D" android:offset="0.0" />
+                <item android:color="#1A47C8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Film reel squares on the left -->
+    <path
+         android:fillColor="#1A47C8"
+         android:pathData="M15,25 h10 v10 h-10 z M15,45 h10 v10 h-10 z M15,65 h10 v10 h-10 z" />
+    <!-- Star in the middle -->
+    <path
+         android:fillColor="#FF2D78"
+         android:pathData="M55,30 l3,8 h8 l-6,5 l2,8 l-7,-5 l-7,5 l2,-8 l-6,-5 h8 z" />
+</vector>

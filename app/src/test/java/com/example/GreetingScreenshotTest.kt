@@ -21,7 +21,39 @@ class GreetingScreenshotTest {
 
   @Test
   fun greeting_screenshot() {
-    composeTestRule.setContent { MyApplicationTheme { Greeting("Robolectric") } }
+    val mockCandidates = listOf(
+      com.example.network.GeminiClient.CandidateWithScore(
+        candidate = com.example.network.OmdbSearchResult(
+          Title = "Breaking Bad",
+          Year = "2008–2013",
+          imdbID = "tt0903747",
+          Type = "series",
+          Poster = "N/A"
+        ),
+        score = 100
+      ),
+      com.example.network.GeminiClient.CandidateWithScore(
+        candidate = com.example.network.OmdbSearchResult(
+          Title = "No Half Measures: Creating the Final Season of Breaking Bad",
+          Year = "2013",
+          imdbID = "tt3152504",
+          Type = "movie",
+          Poster = "N/A"
+        ),
+        score = 45
+      )
+    )
+
+    composeTestRule.setContent {
+      MyApplicationTheme {
+        MovieSelectionCard(
+          query = "Breaking Bad",
+          candidates = mockCandidates,
+          onSelect = { _, _, _ -> },
+          onCancel = {}
+        )
+      }
+    }
 
     composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/greeting.png")
   }

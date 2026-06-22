@@ -31,7 +31,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -322,6 +322,8 @@ fun FloatingWidgetUI(
     val selectedTitle by OverlayState.selectedTitle.collectAsState()
     val ratingResult by OverlayState.ratingResult.collectAsState()
     val isLoading by OverlayState.isOverlayLoading.collectAsState()
+    val overlayCandidates by OverlayState.overlayCandidates.collectAsState()
+    val showCandidateSelection by OverlayState.showCandidateSelection.collectAsState()
 
     val isDragging by OverlayState.isDragging.collectAsState()
     val dragY by OverlayState.dragY.collectAsState()
@@ -336,9 +338,25 @@ fun FloatingWidgetUI(
             val currentResult = OverlayState.ratingResult.value
             if (currentResult == null || currentResult.title.lowercase() != firstTitle.lowercase()) {
                 OverlayState.setOverlayLoading(true)
+                OverlayState.setRatingResult(null)
+                OverlayState.setOverlayCandidates(emptyList())
+                OverlayState.setShowCandidateSelection(false)
                 try {
-                    val res = GeminiClient.fetchMovieReviews(firstTitle)
-                    OverlayState.setRatingResult(res)
+                    val candidates = GeminiClient.getRankedCandidates(firstTitle)
+                    val topEntry = candidates.firstOrNull()
+                    val isExact = topEntry?.let { GeminiClient.isExactMatch(firstTitle, it.candidate) } ?: false
+                    
+                    if (isExact && topEntry != null && topEntry.score >= 80) {
+                        val res = GeminiClient.fetchMovieReviewsByImdbId(
+                            topEntry.candidate.imdbID ?: "",
+                            topEntry.candidate.Title,
+                            topEntry.candidate.Year
+                        )
+                        OverlayState.setRatingResult(res)
+                    } else {
+                        OverlayState.setOverlayCandidates(candidates)
+                        OverlayState.setShowCandidateSelection(true)
+                    }
                 } catch (e: Exception) {
                     // Ignore
                 } finally {
@@ -350,22 +368,13 @@ fun FloatingWidgetUI(
 
     @Composable
     fun PlatformIndicator(appName: String) {
-        val color = when (appName) {
-            "Netflix" -> Color(0xFFE50914)
-            "Prime Video" -> Color(0xFF00A8E1)
-            "Jio Hotstar", "Hotstar" -> Color(0xFFFFC629)
-            "SonyLIV" -> Color(0xFFE25C3E)
-            "ZEE5" -> Color(0xFF8E24AA)
-            else -> Color(0xFF888888)
-        }
-        val textCol = if (appName == "Jio Hotstar" || appName == "Hotstar") Color.Black else Color.White
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(color)
-                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color(0xFFE8003D))
+                .padding(horizontal = 10.dp, vertical = 4.dp)
         ) {
-            Text(appName, fontSize = 10.sp, color = textCol)
+            Text(appName, fontSize = 12.sp, color = Color.White, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
         }
     }
 
@@ -425,9 +434,18 @@ fun FloatingWidgetUI(
                             Text(movie.title, color = Color.White, fontSize = 11.sp, maxLines = 1)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("IMDb: ${movie.imdb}", color = Color(0xFFFFC629), fontSize = 9.sp)
+                                if (movie.imdbVotes != "N/A" && movie.imdbVotes.isNotEmpty()) {
+                                    Text(" (${movie.imdbVotes})", color = Color.Gray, fontSize = 8.sp)
+                                }
                                 if (movie.rottenTomatoes != "N/A" && movie.rottenTomatoes.isNotEmpty()) {
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("RT: ${movie.rottenTomatoes}", color = Color(0xFFFF5252), fontSize = 9.sp)
+                                    val rtBadge = when {
+                                        movie.tomatoImage.lowercase().contains("certified") -> "🏆 "
+                                        movie.tomatoImage.lowercase().contains("fresh") -> "🍅 "
+                                        movie.tomatoImage.lowercase().contains("rotten") -> "🤢 "
+                                        else -> ""
+                                    }
+                                    Text("${rtBadge}RT: ${movie.rottenTomatoes}", color = Color(0xFFFF5252), fontSize = 9.sp)
                                 }
                             }
                         } else if (isLoading) {
@@ -446,18 +464,17 @@ fun FloatingWidgetUI(
         // EXPANDED: Full Review Overlay panel
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
+                .fillMaxSize()
                 .background(Color.Transparent),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.BottomCenter
         ) {
             Card(
                 modifier = Modifier
-                    .fillMaxWidth(0.92f)
-                    .height(480.dp),
-                shape = RoundedCornerShape(24.dp),
+                    .fillMaxWidth()
+                    .height(550.dp),
+                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF161517),
+                    containerColor = Color(0xFF12121F),
                     contentColor = Color.White
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
@@ -465,8 +482,13 @@ fun FloatingWidgetUI(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Drag Handle
+                    Box(modifier = Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(50)).background(Color(0xFF8B2FC9)))
+                    Spacer(modifier = Modifier.height(16.dp))
+
                     // Title Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -474,21 +496,23 @@ fun FloatingWidgetUI(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Movie,
-                                contentDescription = "Movie ratings",
-                                tint = Color(0xFFFFC629)
+                            androidx.compose.foundation.Image(
+                                painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_rateify_logo),
+                                contentDescription = "Rateify AI",
+                                modifier = Modifier.size(28.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Rateify AI",
                                 fontSize = 18.sp,
-                                color = Color.White
+                                color = Color.White,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif
                             )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             activeApp?.let { PlatformIndicator(it) }
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             IconButton(
                                 onClick = {
                                     expanded = false
@@ -498,7 +522,7 @@ fun FloatingWidgetUI(
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Collapse panel",
-                                    tint = Color.Gray
+                                    tint = Color.White
                                 )
                             }
                         }
@@ -510,7 +534,10 @@ fun FloatingWidgetUI(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .verticalScroll(rememberScrollState())
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.Start
                     ) {
                         // Title selector if titles detected on screen
                         if (detectedTitles.isNotEmpty() && ratingResult == null && !isLoading) {
@@ -532,10 +559,31 @@ fun FloatingWidgetUI(
                                             .clickable {
                                                 OverlayState.selectTitle(title)
                                                 OverlayState.setOverlayLoading(true)
+                                                OverlayState.setRatingResult(null)
+                                                OverlayState.setOverlayCandidates(emptyList())
+                                                OverlayState.setShowCandidateSelection(false)
                                                 composeScope.launch {
-                                                    val res = GeminiClient.fetchMovieReviews(title)
-                                                    OverlayState.setRatingResult(res)
-                                                    OverlayState.setOverlayLoading(false)
+                                                    try {
+                                                        val candidates = GeminiClient.getRankedCandidates(title)
+                                                        val topEntry = candidates.firstOrNull()
+                                                        val isExact = topEntry?.let { GeminiClient.isExactMatch(title, it.candidate) } ?: false
+                                                        
+                                                        if (isExact && topEntry != null && topEntry.score >= 80) {
+                                                            val res = GeminiClient.fetchMovieReviewsByImdbId(
+                                                                topEntry.candidate.imdbID ?: "",
+                                                                topEntry.candidate.Title,
+                                                                topEntry.candidate.Year
+                                                            )
+                                                            OverlayState.setRatingResult(res)
+                                                        } else {
+                                                            OverlayState.setOverlayCandidates(candidates)
+                                                            OverlayState.setShowCandidateSelection(true)
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        // Ignore
+                                                    } finally {
+                                                        OverlayState.setOverlayLoading(false)
+                                                    }
                                                 }
                                             }
                                             .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -556,15 +604,17 @@ fun FloatingWidgetUI(
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                placeholder = { Text("Search title manually...", fontSize = 12.sp) },
+                                placeholder = { Text("Search title manually...", fontSize = 12.sp, color = Color(0xFF8A8AB0)) },
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
                                 shape = RoundedCornerShape(12.dp),
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = Color(0xFFFFC629),
-                                    unfocusedBorderColor = Color.DarkGray,
+                                    focusedBorderColor = Color(0xFF8B2FC9),
+                                    unfocusedBorderColor = Color(0xFF8B2FC9),
                                     focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White
+                                    unfocusedTextColor = Color.White,
+                                    focusedContainerColor = Color(0xFF1E1E30),
+                                    unfocusedContainerColor = Color(0xFF1E1E30)
                                 )
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -573,21 +623,42 @@ fun FloatingWidgetUI(
                                     if (searchQuery.isNotEmpty()) {
                                         OverlayState.selectTitle(searchQuery)
                                         OverlayState.setOverlayLoading(true)
+                                        OverlayState.setRatingResult(null)
+                                        OverlayState.setOverlayCandidates(emptyList())
+                                        OverlayState.setShowCandidateSelection(false)
                                         composeScope.launch {
-                                            val res = GeminiClient.fetchMovieReviews(searchQuery)
-                                            OverlayState.setRatingResult(res)
-                                            OverlayState.setOverlayLoading(false)
+                                            try {
+                                                val candidates = GeminiClient.getRankedCandidates(searchQuery)
+                                                val topEntry = candidates.firstOrNull()
+                                                val isExact = topEntry?.let { GeminiClient.isExactMatch(searchQuery, it.candidate) } ?: false
+                                                
+                                                if (isExact && topEntry != null && topEntry.score >= 80) {
+                                                    val res = GeminiClient.fetchMovieReviewsByImdbId(
+                                                        topEntry.candidate.imdbID ?: "",
+                                                        topEntry.candidate.Title,
+                                                        topEntry.candidate.Year
+                                                    )
+                                                    OverlayState.setRatingResult(res)
+                                                } else {
+                                                    OverlayState.setOverlayCandidates(candidates)
+                                                    OverlayState.setShowCandidateSelection(true)
+                                                }
+                                            } catch (e: Exception) {
+                                                // Ignore
+                                            } finally {
+                                                OverlayState.setOverlayLoading(false)
+                                            }
                                         }
                                     }
                                 },
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0xFFFFC629))
+                                    .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color(0xFFE8003D), Color(0xFF8B2FC9))))
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Search,
                                     contentDescription = "Search",
-                                    tint = Color.Black
+                                    tint = Color.White
                                 )
                             }
                         }
@@ -621,26 +692,52 @@ fun FloatingWidgetUI(
 
                             // RATINGS ROW
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                                horizontalArrangement = Arrangement.SpaceAround
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("IMDb", fontSize = 11.sp, color = Color.Gray, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
-                                    Text(movie.imdb, fontSize = 16.sp, color = Color(0xFFFFC629), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    Text("IMDb", color = Color.White, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                    Text(movie.imdb, color = Color(0xFFFFB800), fontSize = 22.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                                 }
+                                Box(modifier = Modifier.padding(horizontal = 16.dp).width(1.dp).height(40.dp).background(Color(0xFF1E1E30)))
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("Rotten Tomatoes", fontSize = 11.sp, color = Color.Gray, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                                    androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
-                                    Text(movie.rottenTomatoes, fontSize = 16.sp, color = Color(0xFFE50914), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    Text("ROTTEN TOMATOES", color = Color.White, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                    if (movie.rottenTomatoes == "N/A" || movie.rottenTomatoes.isEmpty()) {
+                                        Text("N/A", color = Color(0xFF8A8AB0), fontSize = 22.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                                    } else {
+                                        Text(movie.rottenTomatoes, color = Color(0xFFE8003D), fontSize = 22.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            // CONSENSUS GAP INDICATOR
+                            val tmClean = movie.rottenTomatoes.replace("%", "").trim().toIntOrNull()
+                            val tumClean = movie.tomatoUserMeter.replace("%", "").trim().toIntOrNull()
+                            if (tmClean != null && tumClean != null) {
+                                val gap = tumClean - tmClean
+                                val absGap = kotlin.math.abs(gap)
+                                if (absGap >= 8) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    val gapMsg = if (gap > 0) "Audience loved more (+$absGap%)" else "Critics preferred more (-$absGap%)"
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color(0xFFFFC629).copy(alpha = 0.15f))
+                                            .padding(vertical = 4.dp, horizontal = 8.dp),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        Text("Consensus Gap: $gapMsg", fontSize = 9.sp, color = Color.White, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    }
                                 }
                             }
 
                             Spacer(modifier = Modifier.height(14.dp))
 
                             // Synopsis
-                            Text("Synopsis", fontSize = 12.sp, color = Color.Gray)
-                            Text(movie.synopsis, fontSize = 12.sp, color = Color.LightGray)
+                            Text("SYNOPSIS", fontSize = 11.sp, color = Color(0xFF8A8AB0), letterSpacing = 0.12.sp)
+                            Text(movie.synopsis, fontSize = 14.sp, color = Color.White, lineHeight = 22.sp)
 
                             Spacer(modifier = Modifier.height(14.dp))
 
@@ -733,16 +830,113 @@ fun FloatingWidgetUI(
 
                             Spacer(modifier = Modifier.height(14.dp))
 
+                            // Dual Consensus Sentiment Blurby
+                            if ((movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) || 
+                                (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank())) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFF221F24))
+                                        .padding(10.dp)
+                                ) {
+                                    Text("Rateify AI Consensus summaries", fontSize = 11.sp, color = Color(0xFFFFC629), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                    
+                                    if (movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text("RT Critics Consensus: ${movie.criticConsensus}", fontSize = 10.sp, color = Color.White)
+                                    }
+                                    
+                                    if (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text("IMDb What Audiences Say: ${movie.audienceConsensus}", fontSize = 10.sp, color = Color.White)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
+
                             // Critics Synthesis
-                            Text("Positive Reviews", fontSize = 12.sp, color = Color(0xFF4CAF50))
+                            Text("Positive Reviews Summary", fontSize = 12.sp, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                             Text(movie.positiveSummary, fontSize = 11.sp, color = Color.LightGray)
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            Text("Critical Consensus", fontSize = 12.sp, color = Color(0xFFE50914))
+                            Text("Common Criticisms Summary", fontSize = 12.sp, color = Color(0xFFE50914), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                             Text(movie.negativeSummary, fontSize = 11.sp, color = Color.LightGray)
 
                             Spacer(modifier = Modifier.height(16.dp))
+                        } else if (showCandidateSelection && overlayCandidates.isNotEmpty()) {
+                            Text(
+                                text = "Multiple OMDb matches found. Select correct:",
+                                fontSize = 13.sp,
+                                color = Color(0xFFFFC629),
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                overlayCandidates.take(5).forEach { candidateWithScore ->
+                                    val candidate = candidateWithScore.candidate
+                                    val cId = candidate.imdbID ?: ""
+                                    val cTitle = candidate.Title ?: ""
+                                    val cYear = candidate.Year ?: ""
+                                    val cType = candidate.Type?.lowercase() ?: ""
+
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                OverlayState.setOverlayLoading(true)
+                                                OverlayState.setShowCandidateSelection(false)
+                                                OverlayState.setOverlayCandidates(emptyList())
+                                                composeScope.launch {
+                                                    try {
+                                                        val res = GeminiClient.fetchMovieReviewsByImdbId(cId, cTitle, cYear)
+                                                        OverlayState.setRatingResult(res)
+                                                    } catch (e: Exception) {
+                                                        // Ignore
+                                                    } finally {
+                                                        OverlayState.setOverlayLoading(false)
+                                                    }
+                                                }
+                                            },
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = Color(0xFF221F24)
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Movie,
+                                                contentDescription = null,
+                                                tint = Color.LightGray,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = cTitle,
+                                                    fontSize = 14.sp,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                                Text(
+                                                    text = "$cYear • ${cType.uppercase()}",
+                                                    fontSize = 11.sp,
+                                                    color = Color.Gray
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             // Empty State
                             Box(
@@ -771,17 +965,21 @@ fun FloatingWidgetUI(
                     }
 
                     // Reset Button
-                    if (ratingResult != null) {
-                        Button(
-                            onClick = { OverlayState.setRatingResult(null) },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF2B292D),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(12.dp)
+                    if (ratingResult != null || showCandidateSelection) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color(0xFFE8003D), Color(0xFF8B2FC9))))
+                                .clickable {
+                                    OverlayState.setRatingResult(null)
+                                    OverlayState.setOverlayCandidates(emptyList())
+                                    OverlayState.setShowCandidateSelection(false)
+                                },
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text("Search another film", fontSize = 12.sp)
+                            Text("Search another film", color = Color.White, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                         }
                     }
                 }
