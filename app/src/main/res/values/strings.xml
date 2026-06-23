@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">Rateify</string>
+    <string name="app_tagline">Know before you watch.</string>
     <string name="accessibility_description">Checks titles dynamically in the background while you are viewing movies on Netflix, Prime Video, Jio Hotstar, SonyLIV, or ZEE5 to overlay ratings automatically.</string>
 </resources>

@@ -502,13 +502,23 @@ fun FloatingWidgetUI(
                                 modifier = Modifier.size(28.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Rateify AI",
-                                fontSize = 18.sp,
-                                color = Color.White,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif
-                            )
+                            Column {
+                                Text(
+                                    text = "Rateify AI",
+                                    fontSize = 18.sp,
+                                    color = Color.White,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif
+                                )
+                                Text(
+                                    text = "Know before you watch.",
+                                    fontSize = 13.sp,
+                                    color = Color(0xFF8A8AB0),
+                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                                    letterSpacing = 0.3.sp
+                                )
+                            }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             activeApp?.let { PlatformIndicator(it) }

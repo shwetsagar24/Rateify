@@ -14,6 +14,9 @@ interface MovieDao {
     @Query("SELECT * FROM movie_ratings WHERE title LIKE :title LIMIT 1")
     suspend fun getRatingByTitle(title: String): MovieRatingEntity?
 
+    @Query("SELECT * FROM movie_ratings WHERE imdbId = :imdbId LIMIT 1")
+    suspend fun getRatingByImdbId(imdbId: String): MovieRatingEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRating(rating: MovieRatingEntity): Long
 

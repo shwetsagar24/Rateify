@@ -20,6 +20,13 @@ data class MovieRatingEntity(
     val imdbId: String = "N/A",
     val timestamp: Long = System.currentTimeMillis(),
     
+    val parentsGuideSex: String = "N/A",
+    val parentsGuideViolence: String = "N/A",
+    val parentsGuideProfanity: String = "N/A",
+    val parentsGuideDrugs: String = "N/A",
+    val parentsGuideIntense: String = "N/A",
+    val rated: String = "N/A",
+    
     // Contextual rating presentation fields
     val imdbVotes: String = "N/A",
     val tomatoMeter: String = "N/A",

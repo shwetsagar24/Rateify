@@ -14,8 +14,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +21,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,18 +38,26 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.MovieRatingEntity
 import com.example.network.GeminiClient
+import com.example.network.TmdbClient
+import com.example.network.TmdbTarget
+import com.example.network.ParentsGuideState
 import com.example.service.FloatingOverlayService
 import com.example.service.OverlayState
 import com.example.ui.MovieViewModel
@@ -63,15 +70,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // Initialize custom API Key from persistent local SharedPreferences storage
+        // Load custom saved API keys on startup
         val sharedPrefs = getSharedPreferences("RateifyPrefs", MODE_PRIVATE)
         com.example.network.GeminiClient.customApiKey = sharedPrefs.getString("gemini_api_key", null)
+        com.example.network.TmdbClient.customApiKey = sharedPrefs.getString("tmdb_api_key", null)
 
         setContent {
             MyApplicationTheme {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    containerColor = Color(0xFF0A0A1A)
+                    containerColor = Color(0xFF03030C)
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         MovieRatingsScreen()
@@ -83,11 +91,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Trigger a UI re-eval for accessibility / overlay service status checks
+        // Force refresh configuration checks
         _checkTriggers.value = !_checkTriggers.value
     }
 
-    // A state trigger to refresh permission state when coming back from settings
     companion object {
         val _checkTriggers = mutableStateOf(false)
     }
@@ -100,7 +107,7 @@ fun MovieRatingsScreen(
     val context = LocalContext.current
     val checkTrigger by MainActivity._checkTriggers
 
-    // Check permissions
+    // Verify Active System Permissions
     var isOverlayGranted by remember(checkTrigger) {
         mutableStateOf(Settings.canDrawOverlays(context))
     }
@@ -108,890 +115,1300 @@ fun MovieRatingsScreen(
         mutableStateOf(isAccessibilityServiceEnabled(context))
     }
 
+    // ViewModel State Bindings
     val searchUiState by viewModel.searchUiState.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val activeStreamingApp by OverlayState.currentStreamingApp.collectAsState()
 
-    var searchQuery by remember { mutableStateOf("") }
-    var activeTab by remember { mutableStateOf(0) } // 0: Catalog Hub, 1: Search & Setup
-    var showSettingsDialog by remember { mutableStateOf(false) }
+    // Homepage Categorical Sources
+    val trendingAll by viewModel.trendingAll.collectAsState()
+    val trendingMovies by viewModel.trendingMovies.collectAsState()
+    val trendingTv by viewModel.trendingTv.collectAsState()
+    val topRatedMovies by viewModel.topRatedMovies.collectAsState()
+    val topRatedTv by viewModel.topRatedTv.collectAsState()
+    val trendingDocumentaries by viewModel.trendingDocumentaries.collectAsState()
+    val mediaRatings by viewModel.mediaRatings.collectAsState()
 
-    // Ambient glow animation for active streaming tracker status
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_alpha"
-    )
+    // Bottom Navigation State: 0: Home, 1: Search, 2: Settings
+    var activeTab by remember { mutableStateOf(0) }
+    
+    // Bottom Sheet Detail Overlay Item
+    var selectedDetailMovie by remember { mutableStateOf<MovieRatingEntity?>(null) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .drawBehind {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color(0x1AFA320A), Color.Transparent) // Dark red flare
-                    ),
-                    radius = 500.dp.toPx(),
-                    center = Offset(size.width / 2f, -100f)
-                )
-            }
-    ) {
-        Column(
+    // Home Filters State
+    var selectedPlatform by remember { mutableStateOf("All") }
+    var selectedType by remember { mutableStateOf("All") }
+
+    // Load defaults if applicable
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
+        selectedPlatform = prefs.getString("default_platform_preference", "All") ?: "All"
+    }
+
+    // Global listener: Successful Search automatically triggers Detail Overlay Bottom Sheet
+    LaunchedEffect(searchUiState) {
+        if (searchUiState is SearchUiState.Success) {
+            selectedDetailMovie = (searchUiState as SearchUiState.Success).movie
+            viewModel.resetSearchState()
+        }
+    }
+
+    // Base Frame Container
+    Scaffold(
+        bottomBar = {
+            BottomNavBar(
+                activeTab = activeTab,
+                onTabSelect = { activeTab = it }
+            )
+        },
+        containerColor = Color(0xFF03030C)
+    ) { paddingValues ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp)
-        ) {
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Beautiful App Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Image(
-                        painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_rateify_logo),
-                        contentDescription = "Rateify AI Logo",
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                .padding(paddingValues)
+                .drawBehind {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0x1F8B2FC9), Color.Transparent)
+                        ),
+                        radius = 450.dp.toPx(),
+                        center = Offset(size.width / 2f, -100f)
                     )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column {
-                        Text(
-                            text = "Rateify AI",
-                            fontSize = 26.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            letterSpacing = (-0.5).sp
-                        )
-                        Text(
-                            text = "Real-time overlay scanner",
-                            fontSize = 11.sp,
-                            color = Color(0xFF9E9E9E),
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
                 }
-
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // APP MODULE HEADER ROW
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    val overlayActive by OverlayState.isOverlayVisible.collectAsState()
-                    // Sleek live-scanning indicator
-                    if (overlayActive) {
-                        Row(
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_rateify_logo),
+                            contentDescription = "Rateify AI Logo",
                             modifier = Modifier
-                                .clip(RoundedCornerShape(30.dp))
-                                .background(Color.Transparent)
-                                .clickable {
-                                    triggerOverlay(context, FloatingOverlayService.ACTION_HIDE)
-                                    Toast.makeText(context, "Overlay Suspended", Toast.LENGTH_SHORT).show()
-                                }
-                                .padding(horizontal = 8.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFE8003D).copy(alpha = pulseAlpha))
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
                             Text(
-                                text = "LIVE",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFE8003D),
-                                letterSpacing = 0.5.sp
-                            )
-                        }
-                    } else {
-                        IconButton(
-                            onClick = {
-                                if (isOverlayGranted) {
-                                    triggerOverlay(context, FloatingOverlayService.ACTION_SHOW)
-                                    Toast.makeText(context, "Overlay Activated", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Please grant Overlay permission below", Toast.LENGTH_LONG).show()
-                                }
-                            },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PlayCircleOutline,
-                                contentDescription = "Start LIVE",
-                                tint = Color(0xFF9E9E9E),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-
-                    // Settings Icon
-                    IconButton(
-                        onClick = { showSettingsDialog = true },
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color.Transparent)
-                            .border(1.dp, Color(0xFF2A2A2A), CircleShape)
-                            .testTag("open_settings_icon")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Settings",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Elegant Customized Tab Segmented Row Controller
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF12121F))
-                    .border(1.dp, Color(0xFF1E1C24), RoundedCornerShape(16.dp))
-                    .padding(4.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (activeTab == 0) Color(0xFF12121F) else Color.Transparent)
-                        .clickable { activeTab = 0 }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Movie,
-                            contentDescription = "Platforms Icon",
-                            tint = if (activeTab == 0) Color(0xFF8B2FC9) else Color(0xFF8B8894),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Catalog Hub",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (activeTab == 0) Color.White else Color(0xFF8B8894)
-                        )
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (activeTab == 1) Color(0xFF12121F) else Color.Transparent)
-                        .clickable { activeTab = 1 }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Search & Setup Icon",
-                            tint = if (activeTab == 1) Color(0xFF8B2FC9) else Color(0xFF8B8894),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Search & Setup",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (activeTab == 1) Color.White else Color(0xFF8B8894)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(18.dp))
-
-            if (activeTab == 0) {
-                CuratedPlatformCatalog(
-                    onMovieSelect = { title ->
-                        viewModel.searchMovie(title)
-                        activeTab = 1
-                    }
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // SETUP PERMISSIONS COMPANION CARD
-                    val isSetupComplete = isOverlayGranted && isAccessibilityGranted
-                    if (!isSetupComplete) {
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(20.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color(0xFF12121F),
-                                    contentColor = Color.White
-                                ),
-                                border = BorderStroke(1.dp, Color(0xFF1E1C24))
-                            ) {
-                                Column(modifier = Modifier.padding(18.dp)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Column {
-                                            Text(
-                                                "Background Scanner Setup",
-                                                fontSize = 16.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.White
-                                            )
-                                            Text(
-                                                "Enable permissions to auto-inject reviews as you browse streaming lists.",
-                                                fontSize = 11.sp,
-                                                color = Color(0xFF8B8894)
-                                            )
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-
-                                    PermissionStatusRow(
-                                        title = "Display Over Other Apps",
-                                        desc = "Grants authority to compile HUD feedback bubbles on Prime Video, Netflix, Jio Hotstar, SonyLIV, and ZEE5.",
-                                        granted = isOverlayGranted,
-                                        onGrantClick = {
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                                val intent = Intent(
-                                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                    Uri.parse("package:${context.packageName}")
-                                                )
-                                                context.startActivity(intent)
-                                            }
-                                        }
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    HorizontalDivider(color = Color(0xFF1E1C24))
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    PermissionStatusRow(
-                                        title = "Accessibility Auto-Scanner",
-                                        desc = "Inspects passive title changes when on media apps to query relevant review aggregates.",
-                                        granted = isAccessibilityGranted,
-                                        onGrantClick = {
-                                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                            context.startActivity(intent)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // GEMINI API KEY CONFIGURATION CARD
-                    item {
-                        var isEditingKey by remember { mutableStateOf(false) }
-                        val currentSavedKey = remember { mutableStateOf(com.example.network.GeminiClient.customApiKey ?: "") }
-                        var tempKeyText by remember { mutableStateOf(currentSavedKey.value) }
-                        var isPasswordVisible by remember { mutableStateOf(false) }
-
-                        Card(
-                            modifier = Modifier.fillMaxWidth().testTag("gemini_key_card"),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFF12121F),
-                                contentColor = Color.White
-                            ),
-                            border = BorderStroke(1.dp, Color(0xFF1E1C24))
-                        ) {
-                            Column(modifier = Modifier.padding(18.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.VpnKey,
-                                        contentDescription = "Gemini Key Icon",
-                                        tint = Color(0xFF8B2FC9),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        "Gemini AI API Key",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-                                
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "Configure your personal Gemini API key to query high-fidelity critic ratings, summaries, and platform details. Alternatively, configure 'GEMINI_API_KEY' in the AI Studio Secrets panel.",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF8B8894)
-                                )
-
-                                Spacer(modifier = Modifier.height(14.dp))
-
-                                if (isEditingKey) {
-                                    OutlinedTextField(
-                                        value = tempKeyText,
-                                        onValueChange = { tempKeyText = it },
-                                        placeholder = { Text("AIzaSy...", color = Color(0xFF63616B), fontSize = 13.sp) },
-                                        singleLine = true,
-                                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                        modifier = Modifier.fillMaxWidth().testTag("gemini_key_input"),
-                                        shape = RoundedCornerShape(12.dp),
-                                        trailingIcon = {
-                                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
-                                                Icon(
-                                                    imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                                    contentDescription = "Toggle Key Visibility",
-                                                    tint = Color(0xFF8B8894)
-                                                )
-                                            }
-                                        },
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedBorderColor = Color(0xFF8B2FC9),
-                                            unfocusedBorderColor = Color(0xFF1E1C24),
-                                            focusedContainerColor = Color(0xFF0D0C0E),
-                                            unfocusedContainerColor = Color(0xFF0D0C0E),
-                                            focusedTextColor = Color.White,
-                                            unfocusedTextColor = Color.White
-                                        )
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        TextButton(
-                                            onClick = {
-                                                isEditingKey = false
-                                                tempKeyText = currentSavedKey.value
-                                            }
-                                        ) {
-                                            Text("Cancel", color = Color(0xFF8B8894))
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Button(
-                                            onClick = {
-                                                val saved = tempKeyText.trim()
-                                                val sharedPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
-                                                sharedPrefs.edit().putString("gemini_api_key", saved.ifBlank { null }).apply()
-                                                com.example.network.GeminiClient.customApiKey = saved.ifBlank { null }
-                                                currentSavedKey.value = saved
-                                                isEditingKey = false
-                                                Toast.makeText(context, "Gemini API Key Saved!", Toast.LENGTH_SHORT).show()
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B2FC9), contentColor = Color.Black),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Text("Save & Connect", fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                } else {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(
-                                                        if (currentSavedKey.value.isNotBlank() || (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")) Color(0xFF10B981)
-                                                        else Color(0xFFEF4444)
-                                                    )
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = if (currentSavedKey.value.isNotBlank()) {
-                                                    "Custom Key Connected"
-                                                } else if (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY") {
-                                                    "AI Studio Key Linked"
-                                                } else {
-                                                    "Key Missing (Fallback Active)"
-                                                },
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (currentSavedKey.value.isNotBlank() || (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")) Color(0xFF10B981)
-                                                else Color(0xFFEF4444)
-                                            )
-                                        }
-
-                                        Row {
-                                            if (currentSavedKey.value.isNotBlank()) {
-                                                IconButton(
-                                                    onClick = {
-                                                        val sharedPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
-                                                        sharedPrefs.edit().remove("gemini_api_key").apply()
-                                                        com.example.network.GeminiClient.customApiKey = null
-                                                        currentSavedKey.value = ""
-                                                        tempKeyText = ""
-                                                        Toast.makeText(context, "Custom Key Cleared!", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Delete,
-                                                        contentDescription = "Delete key",
-                                                        tint = Color(0xFFEF4444)
-                                                    )
-                                                }
-                                            }
-                                            IconButton(
-                                                onClick = { isEditingKey = true }
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Edit,
-                                                    contentDescription = "Edit key",
-                                                    tint = Color(0xFF8B2FC9)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // ACTIVE DETECTED STREAMING NOTIFICATION
-                    activeStreamingApp?.let { app ->
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color(0xFF0F1513),
-                                    contentColor = Color.White
-                                ),
-                                border = BorderStroke(1.dp, Color(0xFF0D241C))
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF142C21)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.TrendingUp,
-                                            contentDescription = "Active scanning status",
-                                            tint = Color(0xFF10B981),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(14.dp))
-                                    Column {
-                                        Text("LIVE TELEMETRY ACTIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), letterSpacing = 1.sp)
-                                        Text("Sensing media inside: $app", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // INLINE SEARCH PROCESSES OR SUCCESS DETAILS
-                    item {
-                        AnimatedVisibility(
-                            visible = searchUiState !is SearchUiState.Idle,
-                            enter = fadeIn() + expandVertically(),
-                            exit = fadeOut() + shrinkVertically()
-                        ) {
-                            when (searchUiState) {
-                                is SearchUiState.Loading -> {
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(20.dp),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
-                                        border = BorderStroke(1.dp, Color(0xFF1E1C24))
-                                    ) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(28.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            CircularProgressIndicator(color = Color(0xFF8B2FC9), strokeWidth = 3.dp)
-                                            Spacer(modifier = Modifier.height(14.dp))
-                                            Text(
-                                                "Synthesizing public reviews...",
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = Color.White
-                                            )
-                                            Text(
-                                                "Analyzing critics Consensus via Gemini AI...",
-                                                fontSize = 11.sp,
-                                                color = Color(0xFF8B8894),
-                                                modifier = Modifier.padding(top = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                is SearchUiState.Success -> {
-                                    val movie = (searchUiState as SearchUiState.Success).movie
-                                    MovieReviewDetailCard(movie = movie, onClose = { viewModel.resetSearchState() })
-                                }
-                                is SearchUiState.SelectCandidate -> {
-                                    val state = searchUiState as SearchUiState.SelectCandidate
-                                    MovieSelectionCard(
-                                        query = state.query,
-                                        candidates = state.candidates,
-                                        onSelect = { imdbId, title, year -> viewModel.fetchAndShowMovieById(imdbId, title, year) },
-                                        onCancel = { viewModel.resetSearchState() }
-                                    )
-                                }
-                                is SearchUiState.Error -> {
-                                    val msg = (searchUiState as SearchUiState.Error).message
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
-                                        shape = RoundedCornerShape(20.dp),
-                                        border = BorderStroke(1.dp, Color(0xFF3F1A1B))
-                                    ) {
-                                        Column(modifier = Modifier.padding(18.dp)) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(imageVector = Icons.Default.Cancel, contentDescription = "Error", tint = Color(0xFFEF5350))
-                                                Spacer(modifier = Modifier.width(10.dp))
-                                                Text("Lookup Interrupted", fontWeight = FontWeight.Bold, color = Color(0xFFEF5350))
-                                            }
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Text(msg, fontSize = 12.sp, color = Color(0xFFD4C8C8), lineHeight = 18.sp)
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Button(
-                                                onClick = { viewModel.resetSearchState() },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F1A1B)),
-                                                shape = RoundedCornerShape(10.dp)
-                                            ) {
-                                                Text("Acknowledge", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                    }
-                                }
-                                else -> {}
-                            }
-                        }
-                    }
-
-                    // HISTORY OF LOCAL RATINGS
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "Recent Searches",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
+                                text = "Rateify AI",
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.ExtraBold,
                                 color = Color.White
                             )
-                            if (searchHistory.isNotEmpty()) {
-                                Text(
-                                    "Clear All",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFE50914),
-                                    modifier = Modifier.clickable { viewModel.clearAllHistory() }
-                                )
-                            }
-                        }
-                    }
-
-                    if (searchHistory.isNotEmpty()) {
-                        items(searchHistory) { historyItem ->
-                            HistoryRatingRow(
-                                item = historyItem,
-                                onClick = {
-                                    viewModel.selectCachedMovie(historyItem)
-                                    activeTab = 1
-                                },
-                                onDelete = { viewModel.deleteHistoryItem(historyItem.id) }
+                            Text(
+                                text = "Know before you watch.",
+                                fontSize = 13.sp,
+                                color = Color(0xFF8A8AB0),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                                letterSpacing = 0.3.sp
                             )
                         }
-                    } else {
-                        item {
+                    }
+
+                    // Live Scan System Indicator Pill
+                    val isHUDServiceActive by OverlayState.isOverlayVisible.collectAsState()
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (isHUDServiceActive) Color(0x2210B981) else Color(0x1A8B8894))
+                            .clickable {
+                                if (isOverlayGranted) {
+                                    val action = if (isHUDServiceActive) FloatingOverlayService.ACTION_HIDE else FloatingOverlayService.ACTION_SHOW
+                                    triggerOverlay(context, action)
+                                    Toast.makeText(context, if (isHUDServiceActive) "Overlay Closed" else "Overlay Launched", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "System overlay permissions required", Toast.LENGTH_LONG).show()
+                                    activeTab = 2 // Move to settings to setup
+                                }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (isHUDServiceActive) Color(0xFF10B981) else Color(0xFF8B8894))
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isHUDServiceActive) "HUD ACTIVE" else "HUD READY",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isHUDServiceActive) Color(0xFF10B981) else Color(0xFF8B8894),
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                }
+
+                // SCREEN SHIFT CONTROLLER
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    when (activeTab) {
+                        0 -> HomeScreen(
+                            trendingAll = trendingAll,
+                            trendingMovies = trendingMovies,
+                            trendingTv = trendingTv,
+                            topRatedMovies = topRatedMovies,
+                            topRatedTv = topRatedTv,
+                            trendingDocumentaries = trendingDocumentaries,
+                            mediaRatings = mediaRatings,
+                            selectedPlatform = selectedPlatform,
+                            selectedType = selectedType,
+                            onPlatformChange = { selectedPlatform = it },
+                            onTypeChange = { selectedType = it },
+                            viewModel = viewModel,
+                            onMovieClick = { selectedDetailMovie = it }
+                        )
+
+                        1 -> SearchScreen(
+                            searchUiState = searchUiState,
+                            searchHistory = searchHistory,
+                            viewModel = viewModel
+                        )
+
+                        2 -> SettingsScreen(
+                            isOverlayGranted = isOverlayGranted,
+                            isAccessibilityGranted = isAccessibilityGranted,
+                            viewModel = viewModel,
+                            searchUiState = searchUiState,
+                            searchHistory = searchHistory
+                        )
+                    }
+                }
+            }
+
+            // MODAL DETAILED RATING SHEET OVERLAY
+            selectedDetailMovie?.let { movie ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .clickable { selectedDetailMovie = null }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.92f)
+                            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                            .background(Color(0xFF07070F))
+                            .border(1.dp, Color(0xFF1B1B26), RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                            .clickable(enabled = false) {}
+                    ) {
+                        Column {
+                            // Top Drag Indicator Handle Bar
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFF12121F))
-                                    .border(1.dp, Color(0xFF1E1C24), RoundedCornerShape(16.dp))
-                                    .padding(28.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "No recent searches yet.",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color(0xFF63616B)
+                                    .padding(vertical = 12.dp)
+                                    .size(width = 44.dp, height = 4.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF2C2C3C))
+                                    .align(Alignment.CenterHorizontally)
+                            )
+                            
+                            Box(modifier = Modifier.weight(1f)) {
+                                MovieReviewDetailCard(
+                                    movie = movie,
+                                    onClose = { selectedDetailMovie = null },
+                                    viewModel = viewModel
                                 )
                             }
                         }
-                    }
-
-                    item {
-                        Spacer(modifier = Modifier.height(20.dp))
                     }
                 }
             }
         }
     }
+}
 
-    if (showSettingsDialog) {
-        val localPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
-        var tempKeyText by remember { mutableStateOf(com.example.network.GeminiClient.customApiKey ?: "") }
-        var isPasswordVisible by remember { mutableStateOf(false) }
-        var isEditingKey by remember { mutableStateOf(false) }
+// ---------------------- HOME SCREEN MODULE ----------------------
+@Composable
+fun HomeScreen(
+    trendingAll: List<TmdbTarget>,
+    trendingMovies: List<TmdbTarget>,
+    trendingTv: List<TmdbTarget>,
+    topRatedMovies: List<TmdbTarget>,
+    topRatedTv: List<TmdbTarget>,
+    trendingDocumentaries: List<TmdbTarget>,
+    mediaRatings: Map<Int, MovieRatingEntity>,
+    selectedPlatform: String,
+    selectedType: String,
+    onPlatformChange: (String) -> Unit,
+    onTypeChange: (String) -> Unit,
+    viewModel: MovieViewModel,
+    onMovieClick: (MovieRatingEntity) -> Unit
+) {
+    // Brand Chip Color Definitions (India Popular Networks First)
+    val platformChipsList = listOf(
+        "All", "Netflix", "Prime Video", "Disney+ Hotstar", "JioHotstar", "SonyLIV", 
+        "Zee5", "Apple TV+", "Max", "Hulu", "YouTube Premium", "Peacock", "Paramount+",
+        "Discovery+", "MUBI", "Aha", "Hoichoi", "Lionsgate Play", "MX Player", "Voot", 
+        "Sun NXT"
+    )
 
-        AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
+    val contentTypesList = listOf("All", "Movies", "TV Series", "Documentaries")
+
+    // Dynamic Filter Implementations
+    fun filterList(list: List<TmdbTarget>): List<TmdbTarget> {
+        return list.filter { item ->
+            // Network Provider Filtering
+            val matchesPlatform = if (selectedPlatform == "All") {
+                true
+            } else {
+                val rating = mediaRatings[item.id]
+                rating?.platforms?.contains(selectedPlatform, ignoreCase = true) == true
+            }
+            matchesPlatform
+        }
+    }
+
+    val filteredAll = filterList(trendingAll)
+    val filteredMovies = filterList(trendingMovies)
+    val filteredTv = filterList(trendingTv)
+    val filteredTopMovies = filterList(topRatedMovies)
+    val filteredTopTv = filterList(topRatedTv)
+    val filteredDocs = filterList(trendingDocumentaries)
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+        contentPadding = PaddingValues(bottom = 28.dp)
+    ) {
+        // 1. Sleek Filter Bar Row Context
+        item {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                // Platform Badges Layout (With selected Glow Shadow)
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings Icon",
-                        tint = Color(0xFF8B2FC9),
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "System Settings",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text(
-                        text = "Configure your Real-Time Overlay scanning permissions and Gemini AI key integrations in one integrated control desk.",
-                        color = Color(0xFF8B8894),
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp
-                    )
-
-                    // Card 1: Permissions Integration
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF12121F),
-                            contentColor = Color.White
-                        ),
-                        border = BorderStroke(1.dp, Color(0xFF2C2933))
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
+                    items(platformChipsList) { platform ->
+                        val isSelected = selectedPlatform == platform
+                        val specColor = platformColors[platform] ?: ChipColor(Color(0xFF17172B), Color.White)
+                        
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (isSelected) specColor.bg else Color(0xFF10101C))
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isSelected) specColor.bg else Color(0xFF1F1F35),
+                                    shape = RoundedCornerShape(20.dp)
+                                )
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.shadow(elevation = 8.dp, shape = RoundedCornerShape(20.dp), ambientColor = specColor.bg, spotColor = specColor.bg)
+                                    } else Modifier
+                                )
+                                .clickable { onPlatformChange(platform) }
+                                .padding(horizontal = 14.dp, vertical = 7.dp)
+                        ) {
                             Text(
-                                text = "Background Scanner Setup",
-                                fontSize = 14.sp,
+                                text = platform,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Required to scan active streaming content:",
-                                fontSize = 10.sp,
-                                color = Color(0xFF8B8894)
-                            )
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            PermissionStatusRow(
-                                title = "Display Over Other Apps",
-                                desc = "Required to render the rating overlay feedback bubbles over other video services.",
-                                granted = isOverlayGranted,
-                                onGrantClick = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        )
-                                        context.startActivity(intent)
-                                    }
-                                }
-                            )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-                            HorizontalDivider(color = Color(0xFF2C2933))
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            PermissionStatusRow(
-                                title = "Accessibility Scanner",
-                                desc = "Required to read active movie/show titles in your favorite streaming apps.",
-                                granted = isAccessibilityGranted,
-                                onGrantClick = {
-                                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                    context.startActivity(intent)
-                                }
+                                color = if (isSelected) specColor.text else Color(0xFF8B8894)
                             )
                         }
                     }
+                }
+                
+                Spacer(modifier = Modifier.height(10.dp))
 
-                    // Card 2: Gemini API Key Setup
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF12121F),
-                            contentColor = Color.White
-                        ),
-                        border = BorderStroke(1.dp, Color(0xFF2C2933))
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VpnKey,
-                                    contentDescription = "Key Icon",
-                                    tint = Color(0xFF8B2FC9),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Gemini AI API Key",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
+                // Content Types Selection row
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    contentTypesList.forEach { type ->
+                        val isSelected = selectedType == type
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) Color(0xFF8B2FC9) else Color(0xFF0C0C14))
+                                .border(1.dp, if (isSelected) Color(0xFF8B2FC9) else Color(0xFF1C1C2A), RoundedCornerShape(8.dp))
+                                .clickable { onTypeChange(type) }
+                                .padding(horizontal = 12.dp, vertical = 5.dp)
+                        ) {
                             Text(
-                                "Configure your custom key to unlock critic consensus summaries.",
+                                text = type,
                                 fontSize = 10.sp,
-                                color = Color(0xFF8B8894)
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.White else Color(0xFF9491A0)
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+                }
+            }
+        }
 
-                            if (isEditingKey) {
-                                OutlinedTextField(
-                                    value = tempKeyText,
-                                    onValueChange = { tempKeyText = it },
-                                    placeholder = { Text("AIzaSy...", color = Color(0xFF63616B), fontSize = 12.sp) },
-                                    singleLine = true,
-                                    visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(10.dp),
-                                    trailingIcon = {
-                                        IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
-                                            Icon(
-                                                imageVector = if (isPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                                contentDescription = "Toggle Visibility",
-                                                tint = Color(0xFF8B8894),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    },
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = Color(0xFF8B2FC9),
-                                        unfocusedBorderColor = Color(0xFF2C2933),
-                                        focusedContainerColor = Color(0xFF0D0C0E),
-                                        unfocusedContainerColor = Color(0xFF0D0C0E),
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White
-                                    )
+        // 2. HERO BANNER - #1 TRENDING TITLE (Large wide card)
+        if (filteredAll.isNotEmpty() && selectedType == "All") {
+            val heroItem = filteredAll[0]
+            item {
+                LaunchedEffect(heroItem.id) {
+                    viewModel.fetchRatingsForTmdbItem(heroItem, isTv = heroItem.media_type == "tv")
+                }
+                val rating = mediaRatings[heroItem.id]
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(230.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF0E0E18))
+                        .border(1.dp, Color(0xFF1E1E2D), RoundedCornerShape(16.dp))
+                        .clickable { rating?.let { onMovieClick(it) } }
+                ) {
+                    // Poster Backdrop
+                    coil.compose.AsyncImage(
+                        model = "https://image.tmdb.org/t/p/w780${heroItem.poster_path}",
+                        contentDescription = "Backdrop",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Cinematic Gradient Shade Overlay
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    TextButton(onClick = { isEditingKey = false }) {
-                                        Text("Cancel", color = Color(0xFF8B8894), fontSize = 12.sp)
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Button(
-                                        onClick = {
-                                            val saved = tempKeyText.trim()
-                                            localPrefs.edit().putString("gemini_api_key", saved.ifBlank { null }).apply()
-                                            com.example.network.GeminiClient.customApiKey = saved.ifBlank { null }
-                                            isEditingKey = false
-                                            Toast.makeText(context, "API Key Saved!", Toast.LENGTH_SHORT).show()
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B2FC9), contentColor = Color.Black),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Text("Save", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            )
+                    )
+
+                    // Description text items
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomStart)
+                            .padding(16.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFFE50914))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text("#1 TRENDING", fontSize = 8.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = TmdbClient.mapGenres(heroItem.genre_ids),
+                                fontSize = 10.sp,
+                                color = Color(0xFFA2AAAD),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(6.dp))
+                        
+                        Text(
+                            text = heroItem.title ?: heroItem.name ?: "Trending Title",
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White,
+                            lineHeight = 26.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            // Render ratings on hero if loaded
+                            if (rating != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("⭐", fontSize = 10.sp)
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(rating.imdb, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("🍅", fontSize = 10.sp)
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(rating.rottenTomatoes, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                }
+                                if (rating.tomatoUserMeter != "N/A") {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("🍿", fontSize = 10.sp)
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(rating.tomatoUserMeter, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
                                     }
                                 }
                             } else {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                Text("Analyzing public reviews...", fontSize = 10.sp, color = Color.LightGray, fontStyle = FontStyle.Italic)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. TOP 10 TRENDING NOW - CAROUSEL WITH OVERLAPPED NETFLIX RANK NUMBERS
+        if (filteredAll.isNotEmpty() && selectedType == "All") {
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Top 10 Trending Now",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White,
+                        modifier = Modifier.padding(start = 16.dp, bottom = 10.dp)
+                    )
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(22.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        itemsIndexed(filteredAll.take(10)) { index, item ->
+                            LaunchedEffect(item.id) {
+                                viewModel.fetchRatingsForTmdbItem(item, isTv = item.media_type == "tv")
+                            }
+                            val rating = mediaRatings[item.id]
+
+                            Box(
+                                modifier = Modifier
+                                    .width(135.dp)
+                                    .height(170.dp)
+                            ) {
+                                // Netflix Rank overlay behind the card bottom-left
+                                Text(
+                                    text = "${index + 1}",
+                                    fontSize = 105.sp,
+                                    fontStyle = FontStyle.Italic,
+                                    fontWeight = FontWeight.Black,
+                                    color = Color(0xFF03030C),
+                                    style = TextStyle(
+                                        shadow = Shadow(
+                                            color = Color(0xFF423C56),
+                                            offset = Offset(2f, 2f),
+                                            blurRadius = 8f
+                                        )
+                                    ),
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .offset(x = (-14).dp, y = 20.dp)
+                                )
+
+                                TrendingCard(
+                                    item = item,
+                                    ratingEntity = rating,
+                                    modifier = Modifier
+                                        .width(98.dp)
+                                        .height(148.dp)
+                                        .align(Alignment.BottomEnd)
                                 ) {
-                                    val hasKey = com.example.network.GeminiClient.customApiKey.let { !it.isNullOrBlank() } || (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(6.dp)
-                                                .clip(CircleShape)
-                                                .background(if (hasKey) Color(0xFF10B981) else Color(0xFFEF4444))
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (com.example.network.GeminiClient.customApiKey.let { !it.isNullOrBlank() }) "Custom Key Connected" else if (hasKey) "AI Studio Key Linked" else "Key Missing",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (hasKey) Color(0xFF10B981) else Color(0xFFEF4444)
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = { isEditingKey = true },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Edit,
-                                            contentDescription = "Edit Key",
-                                            tint = Color(0xFF8B2FC9),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
+                                    rating?.let { onMovieClick(it) }
                                 }
                             }
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { showSettingsDialog = false }
+            }
+        }
+
+        // 4. TOP RATED MOVIES SECTION
+        if (filteredTopMovies.isNotEmpty() && (selectedType == "All" || selectedType == "Movies")) {
+            item {
+                CarouselRowSection(
+                    title = "Top Rated Movies",
+                    items = filteredTopMovies,
+                    isTv = false,
+                    viewModel = viewModel,
+                    mediaRatings = mediaRatings,
+                    onMovieClick = onMovieClick
+                )
+            }
+        }
+
+        // 5. TOP RATED TV SERIES SECTION
+        if (filteredTopTv.isNotEmpty() && (selectedType == "All" || selectedType == "TV Series")) {
+            item {
+                CarouselRowSection(
+                    title = "Top Rated Series",
+                    items = filteredTopTv,
+                    isTv = true,
+                    viewModel = viewModel,
+                    mediaRatings = mediaRatings,
+                    onMovieClick = onMovieClick
+                )
+            }
+        }
+
+        // 6. TRENDING DOCUMENTARIES (OPTIONAL ROW)
+        if (filteredDocs.isNotEmpty() && (selectedType == "All" || selectedType == "Documentaries")) {
+            item {
+                CarouselRowSection(
+                    title = "Trending Documentaries",
+                    items = filteredDocs,
+                    isTv = false,
+                    viewModel = viewModel,
+                    mediaRatings = mediaRatings,
+                    onMovieClick = onMovieClick
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CarouselRowSection(
+    title: String,
+    items: List<TmdbTarget>,
+    isTv: Boolean,
+    viewModel: MovieViewModel,
+    mediaRatings: Map<Int, MovieRatingEntity>,
+    onMovieClick: (MovieRatingEntity) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Black,
+            color = Color.White,
+            modifier = Modifier.padding(start = 16.dp, bottom = 10.dp)
+        )
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(items) { item ->
+                LaunchedEffect(item.id) {
+                    viewModel.fetchRatingsForTmdbItem(item, isTv = isTv)
+                }
+                val rating = mediaRatings[item.id]
+                
+                TrendingCard(
+                    item = item,
+                    ratingEntity = rating,
+                    modifier = Modifier.width(110.dp).height(165.dp)
                 ) {
-                    Text("Close", color = Color(0xFF8B2FC9), fontWeight = FontWeight.ExtraBold)
+                    rating?.let { onMovieClick(it) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TrendingCard(
+    item: TmdbTarget,
+    ratingEntity: MovieRatingEntity?,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+        border = BorderStroke(1.dp, Color(0xFF222234))
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Poster Cover
+            coil.compose.AsyncImage(
+                model = "https://image.tmdb.org/t/p/w342${item.poster_path}",
+                contentDescription = item.title ?: item.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Content Type Header Tag
+            val typeStr = when {
+                item.media_type == "tv" -> "SERIES"
+                item.genre_ids?.contains(99) == true -> "DOC"
+                else -> "MOVIE"
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Text(typeStr, fontSize = 7.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+
+            // Bottom Gradient Backdrop
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(65.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
+                        )
+                    )
+            )
+
+            // Bottom Core Ratings Row
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+            ) {
+                Text(
+                    text = item.title ?: item.name ?: "Unknown",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                
+                Spacer(modifier = Modifier.height(2.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (ratingEntity != null) {
+                        // IMDb Rating
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("⭐", fontSize = 8.sp)
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = ratingEntity.imdb.split("/").firstOrNull() ?: "N/A",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
+                            )
+                        }
+
+                        // RT Critic Code
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🍅", fontSize = 8.sp)
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = ratingEntity.rottenTomatoes,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Awaiting...",
+                            fontSize = 7.sp,
+                            color = Color.LightGray,
+                            fontStyle = FontStyle.Italic
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------- SEARCH SCREEN MODULE ----------------------
+@Composable
+fun SearchScreen(
+    searchUiState: SearchUiState,
+    searchHistory: List<MovieRatingEntity>,
+    viewModel: MovieViewModel
+) {
+    var queryText by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+    ) {
+        OutlinedTextField(
+            value = queryText,
+            onValueChange = { queryText = it },
+            placeholder = { Text("Search title manually...", color = Color(0xFF6F6A85), fontSize = 14.sp) },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp)
+                .testTag("manual_search_field"),
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFF8B2FC9),
+                unfocusedBorderColor = Color(0xFF2C2C3E),
+                focusedContainerColor = Color(0xFF10101C),
+                unfocusedContainerColor = Color(0xFF10101C),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White
+            ),
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search Icon",
+                    tint = Color(0xFF8B8894)
+                )
+            },
+            trailingIcon = {
+                if (queryText.isNotEmpty()) {
+                    IconButton(onClick = {
+                        queryText = ""
+                        viewModel.resetSearchState()
+                    }) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Clear", tint = Color.White)
+                    }
                 }
             },
-            containerColor = Color(0xFF12121F),
-            shape = RoundedCornerShape(24.dp)
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                onDone = {
+                    if (queryText.isNotBlank()) {
+                        viewModel.searchMovie(queryText)
+                    }
+                }
+            )
+        )
+
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(bottom = 20.dp)
+        ) {
+            // Live Search Loading or Error widgets
+            item {
+                AnimatedVisibility(
+                    visible = searchUiState !is SearchUiState.Idle,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    when (searchUiState) {
+                        is SearchUiState.Loading -> {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+                                border = BorderStroke(1.dp, Color(0xFF1B1B26))
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    CircularProgressIndicator(color = Color(0xFF8B2FC9), strokeWidth = 3.dp)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text("Analyzing ratings metrics...", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    Text("Gemini AI synthesizing parent guidance reports...", fontSize = 10.sp, color = Color(0xFF8B8894), modifier = Modifier.padding(top = 4.dp))
+                                }
+                            }
+                        }
+
+                        is SearchUiState.SelectCandidate -> {
+                            val state = searchUiState as SearchUiState.SelectCandidate
+                            MovieSelectionCard(
+                                query = state.query,
+                                candidates = state.candidates,
+                                onSelect = { id, title, year -> viewModel.fetchAndShowMovieById(id, title, year) },
+                                onCancel = { viewModel.resetSearchState() }
+                            )
+                        }
+
+                        is SearchUiState.Error -> {
+                            val msg = (searchUiState as SearchUiState.Error).message
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1B0B0C)),
+                                border = BorderStroke(1.dp, Color(0xFF4A1517))
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(imageVector = Icons.Default.Cancel, contentDescription = "Err", tint = Color(0xFFEF5350))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Lookup Incomplete", fontWeight = FontWeight.Black, color = Color(0xFFEF5350), fontSize = 14.sp)
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(msg, fontSize = 12.sp, color = Color(0xFFD8D2D2), lineHeight = 18.sp)
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Button(
+                                        onClick = { viewModel.resetSearchState() },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F1A1B)),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Dismiss", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            // Recent Searches History
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Recent Lookups", fontSize = 15.sp, fontWeight = FontWeight.Black, color = Color.White)
+                    if (searchHistory.isNotEmpty()) {
+                        Text(
+                            text = "Clear History",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE50914),
+                            modifier = Modifier.clickable { viewModel.clearAllHistory() }
+                        )
+                    }
+                }
+            }
+
+            if (searchHistory.isNotEmpty()) {
+                items(searchHistory) { item ->
+                    HistoryRatingRow(
+                        item = item,
+                        onClick = { viewModel.selectCachedMovie(item) },
+                        onDelete = { viewModel.deleteHistoryItem(item.id) }
+                    )
+                }
+            } else {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF0C0C14))
+                            .border(1.dp, Color(0xFF1F1F30), RoundedCornerShape(12.dp))
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Search history is empty.", fontSize = 11.sp, color = Color(0xFF5E5A6C))
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------- SETTINGS SCREEN MODULE ----------------------
+@Composable
+fun SettingsScreen(
+    isOverlayGranted: Boolean,
+    isAccessibilityGranted: Boolean,
+    viewModel: MovieViewModel,
+    searchUiState: SearchUiState,
+    searchHistory: List<MovieRatingEntity>
+) {
+    val context = LocalContext.current
+    val sharedPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
+
+    // OMDb setups
+    val omdbSavedKey = remember { mutableStateOf(sharedPrefs.getString("omdb_api_key", "8171c492") ?: "8171c492") }
+    var tempOnKeyText by remember { mutableStateOf(omdbSavedKey.value) }
+
+    // Gemini sets
+    val gemSavedKey = remember { mutableStateOf(sharedPrefs.getString("gemini_api_key", "") ?: "") }
+    var tempGemKeyText by remember { mutableStateOf(gemSavedKey.value) }
+
+    // TMDb sets
+    val tmdbSavedKey = remember { mutableStateOf(sharedPrefs.getString("tmdb_api_key", "") ?: "") }
+    var tempTmdbKeyText by remember { mutableStateOf(tmdbSavedKey.value) }
+
+    // Dropdown platforms pref
+    var showDropdownPref by remember { mutableStateOf(false) }
+    var prefPlatformOfUser by remember { mutableStateOf(sharedPrefs.getString("default_platform_preference", "All") ?: "All") }
+
+    val platformOptions = listOf("All", "Netflix", "Prime Video", "Disney+ Hotstar", "JioHotstar", "SonyLIV", "Zee5")
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+        // TOP SECTION: Interactive Manual Search Bar (Change 5)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF11111E)),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color(0xFF222234))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Manual Lookups Control Desk", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    
+                    var configQueryText by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = configQueryText,
+                        onValueChange = { configQueryText = it },
+                        placeholder = { Text("Query, e.g. Stranger Things...", color = Color(0xFF8A8AB0), fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF8B2FC9),
+                            unfocusedBorderColor = Color(0xFF2C2C3E),
+                            focusedContainerColor = Color(0xFF030308),
+                            unfocusedContainerColor = Color(0xFF030308),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                if (configQueryText.isNotBlank()) {
+                                    viewModel.searchMovie(configQueryText)
+                                }
+                            }) {
+                                Icon(Icons.Default.ArrowForward, "Go", tint = Color(0xFF8B2FC9))
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // PERMISSIONS AND SERVICE CONTROLS
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+                border = BorderStroke(1.dp, Color(0xFF212130)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Background Overlay Scanner Services", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Configure permissions required to scan content titles overlays on external portals.", fontSize = 10.sp, color = Color(0xFF8B8894))
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    PermissionStatusRow(
+                        title = "Overlay System Window",
+                        desc = "Needed to rendering rating display bubbles over top video applications.",
+                        granted = isOverlayGranted,
+                        onGrantClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = Color(0xFF212132))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    PermissionStatusRow(
+                        title = "Accessibility Capture Scanner",
+                        desc = "Taps into active title details stream inside third-party programs.",
+                        granted = isAccessibilityGranted,
+                        onGrantClick = {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            context.startActivity(intent)
+                        }
+                    )
+                }
+            }
+        }
+
+        // TRIPLE API KEY MANAGER MODULE
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+                border = BorderStroke(1.dp, Color(0xFF212130)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("API Key Integrations", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text("Synchronize keys securely to authorize live metric pipelines.", fontSize = 10.sp, color = Color(0xFF8B8894))
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // OMDb Key
+                    Text("OMDb Rating Key", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = tempOnKeyText,
+                        onValueChange = { tempOnKeyText = it },
+                        singleLine = true,
+                        placeholder = { Text("Enter OMDb key...", color = Color.Gray, fontSize = 11.sp) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF8B2FC9),
+                            unfocusedBorderColor = Color(0xFF212132)
+                        )
+                    )
+
+                    // Gemini Key
+                    Text("Gemini AI API Key (Required for Consensuses & Guides)", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = tempGemKeyText,
+                        onValueChange = { tempGemKeyText = it },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        placeholder = { Text("AIzaSy...", color = Color.Gray, fontSize = 11.sp) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 12.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF8B2FC9),
+                            unfocusedBorderColor = Color(0xFF212132)
+                        )
+                    )
+
+                    // TMDb Key
+                    Text("TMDb Discovery Key (Unlocks Homepage Feeds)", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = tempTmdbKeyText,
+                        onValueChange = { tempTmdbKeyText = it },
+                        singleLine = true,
+                        placeholder = { Text("Enter TMDb key (V3 auth format)...", color = Color.Gray, fontSize = 11.sp) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 14.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF8B2FC9),
+                            unfocusedBorderColor = Color(0xFF212132)
+                        )
+                    )
+
+                    Button(
+                        onClick = {
+                            val omdb = tempOnKeyText.trim().ifBlank { "8171c492" }
+                            val gem = tempGemKeyText.trim()
+                            val tmdb = tempTmdbKeyText.trim()
+                            
+                            sharedPrefs.edit()
+                                .putString("omdb_api_key", omdb)
+                                .putString("gemini_api_key", gem)
+                                .putString("tmdb_api_key", tmdb)
+                                .apply()
+
+                            com.example.network.GeminiClient.customApiKey = gem.ifBlank { null }
+                            com.example.network.TmdbClient.customApiKey = tmdb.ifBlank { null }
+                            
+                            Toast.makeText(context, "Configurations sync success!", Toast.LENGTH_SHORT).show()
+                            viewModel.loadHomepageContent() // Refresh home feed!
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B2FC9), contentColor = Color.White),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Connect and Authorize", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        // PREFERENCES MODULE (Default homepage chips filters)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+                border = BorderStroke(1.dp, Color(0xFF212130)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("Default Preferences", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text("Select default streamline outlet settings on startup.", fontSize = 10.sp, color = Color(0xFF8B8894))
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text("Network preference: $prefPlatformOfUser", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        platformOptions.take(4).forEach { opt ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (prefPlatformOfUser == opt) Color(0xFF8B2FC9) else Color(0xFF17172B))
+                                    .clickable {
+                                        prefPlatformOfUser = opt
+                                        sharedPrefs.edit().putString("default_platform_preference", opt).apply()
+                                        Toast.makeText(context, "Startup filter set to $opt!", Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(opt, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // HUD TOGGLE SWITCH EXTRA
+        item {
+            val isHUDActive by OverlayState.isOverlayVisible.collectAsState()
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+                border = BorderStroke(1.dp, Color(0xFF212130)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Real-Time HUD Overlay Screen", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Active floating scanner widget bubble dynamically.", fontSize = 10.sp, color = Color(0xFF8B8894))
+                    }
+                    Switch(
+                        checked = isHUDActive,
+                        onCheckedChange = { active ->
+                            if (isOverlayGranted) {
+                                triggerOverlay(context, if (active) FloatingOverlayService.ACTION_SHOW else FloatingOverlayService.ACTION_HIDE)
+                            } else {
+                                Toast.makeText(context, "Please configure overlays above first.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF8B2FC9),
+                            checkedTrackColor = Color(0xFF251A31),
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color(0xFF17172B)
+                        )
+                    )
+                }
+            }
+        }
+
+        // THEME DETAILS
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+                border = BorderStroke(1.dp, Color(0xFF212130)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("Deep-Space Dark Concept Mode", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("The exclusive premium aesthetic colorways layer.", fontSize = 10.sp, color = Color(0xFF8B8894))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF8B2FC9).copy(alpha = 0.1f))
+                            .border(1.dp, Color(0xFF8B2FC9), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text("MANDATORY", fontSize = 8.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF8B2FC9))
+                    }
+                }
+            }
+        }
+
+        // SLEEK ABOUT FOOTER
+        item {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Know before you watch.",
+                    fontSize = 13.sp,
+                    color = Color(0xFF8A8AB0),
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                    letterSpacing = 0.3.sp,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                Text(
+                    text = "Rateify AI • Version 2.1.0 • Built with Google Gemini AI",
+                    fontSize = 10.sp,
+                    color = Color(0xFF4C4A5A),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "© 2026 Rateify Inc. All rights reserved.",
+                    fontSize = 9.sp,
+                    color = Color(0xFF323240)
+                )
+            }
+        }
+    }
+}
+
+// ---------------------- COMMON PRESENTATION COMPOSABLES ----------------------
+@Composable
+fun BottomNavBar(
+    activeTab: Int,
+    onTabSelect: (Int) -> Unit
+) {
+    NavigationBar(
+        containerColor = Color(0xFF03030A),
+        tonalElevation = 8.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFF141421), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+    ) {
+        NavigationBarItem(
+            selected = activeTab == 0,
+            onClick = { onTabSelect(0) },
+            icon = { Icon(Icons.Default.Home, "Home", modifier = Modifier.size(22.dp)) },
+            label = { Text("Home", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = Color(0xFF8B2FC9),
+                selectedTextColor = Color.White,
+                unselectedIconColor = Color(0xFF535165),
+                unselectedTextColor = Color(0xFF535165),
+                indicatorColor = Color(0xFF0D0D19)
+            )
+        )
+        NavigationBarItem(
+            selected = activeTab == 1,
+            onClick = { onTabSelect(1) },
+            icon = { Icon(Icons.Default.Search, "Search", modifier = Modifier.size(22.dp)) },
+            label = { Text("Search", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = Color(0xFF8B2FC9),
+                selectedTextColor = Color.White,
+                unselectedIconColor = Color(0xFF535165),
+                unselectedTextColor = Color(0xFF535165),
+                indicatorColor = Color(0xFF0D0D19)
+            )
+        )
+        NavigationBarItem(
+            selected = activeTab == 2,
+            onClick = { onTabSelect(2) },
+            icon = { Icon(Icons.Default.Settings, "Settings", modifier = Modifier.size(22.dp)) },
+            label = { Text("Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = Color(0xFF8B2FC9),
+                selectedTextColor = Color.White,
+                unselectedIconColor = Color(0xFF535165),
+                unselectedTextColor = Color(0xFF535165),
+                indicatorColor = Color(0xFF0D0D19)
+            )
         )
     }
 }
@@ -1005,55 +1422,34 @@ fun PermissionStatusRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(if (granted) Color(0x3310B981) else Color(0x33EF5350)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (granted) Color(0xFF10B981) else Color(0xFFEF5350))
-                    )
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(desc, fontSize = 11.sp, color = Color(0xFF8B8894), lineHeight = 16.sp)
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(desc, fontSize = 10.sp, color = Color(0xFF8B8894), lineHeight = 14.sp, modifier = Modifier.padding(top = 2.dp))
         }
-        Spacer(modifier = Modifier.width(12.dp))
-        if (!granted) {
-            Button(
-                onClick = onGrantClick,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF12121F)),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, Color(0xFF2C2933))
-            ) {
-                Text("Configure", fontSize = 11.sp, color = Color(0xFF8B2FC9), fontWeight = FontWeight.Bold)
-            }
-        } else {
+
+        if (granted) {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0x3310B981))
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .background(Color(0xFF10B981).copy(alpha = 0.15f))
+                    .border(1.dp, Color(0xFF10B981), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "READY",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFF10B981),
-                    letterSpacing = 0.5.sp
-                )
+                Text("AUTHORIZED", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+            }
+        } else {
+            Button(
+                onClick = onGrantClick,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE50914)),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.height(28.dp)
+            ) {
+                Text("AUTHORIZE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White)
             }
         }
     }
@@ -1067,169 +1463,72 @@ fun MovieSelectionCard(
     onCancel: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("movie_selection_card"),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF12121F),
-            contentColor = Color.White
-        ),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, Color(0xFF2A2832))
+        modifier = Modifier.fillMaxWidth().testTag("selection_container_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+        border = BorderStroke(1.dp, Color(0xFF2C2C3F))
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            // Header
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Multiple Matches Found",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "We found multiple results for \"$query\". Please choose the correct title below:",
-                        fontSize = 12.sp,
-                        color = Color(0xFF8B8894)
-                    )
-                }
-                IconButton(
-                    onClick = onCancel,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF12121F))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Cancel selection",
-                        tint = Color.LightGray,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                Text(
+                    text = "Confirm Exact Title Match",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Cancel",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFEF5350),
+                    modifier = Modifier.clickable(onClick = onCancel)
+                )
             }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Candidates List
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                candidates.forEach { entry ->
-                    val candidate = entry.candidate
-                    val score = entry.score
-                    Card(
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Multiple candidate titles found on index for query \"$query\":",
+                fontSize = 10.sp,
+                color = Color(0xFF8B8894)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            candidates.take(5).forEachIndexed { index, wrapper ->
+                val record = wrapper.candidate
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onSelect(record.imdbID ?: "", record.Title ?: "", record.Year ?: "") }
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${index + 1}. ${record.Title ?: "N/A"}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Release Year: ${record.Year ?: "N/A"}",
+                            fontSize = 10.sp,
+                            color = Color(0xFF8B8894)
+                        )
+                    }
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(candidate.imdbID ?: "", candidate.Title ?: "", candidate.Year ?: "") }
-                            .testTag("candidate_item_${candidate.imdbID}"),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF12121F)
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Color(0xFF2A2832))
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF8B2FC9).copy(alpha = 0.15f))
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Poster Column
-                            val posterUrl = candidate.Poster
-                            if (!posterUrl.isNullOrBlank() && posterUrl != "N/A") {
-                                coil.compose.AsyncImage(
-                                    model = posterUrl,
-                                    contentDescription = "Poster of ${candidate.Title}",
-                                    modifier = Modifier
-                                        .width(50.dp)
-                                        .height(75.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(Color.DarkGray),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .width(50.dp)
-                                        .height(75.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(Color(0xFF25222E)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Movie,
-                                        contentDescription = "No image available",
-                                        tint = Color(0xFF8B8894),
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                            }
-                            
-                            Spacer(modifier = Modifier.width(14.dp))
-                            
-                            // Info Column
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = candidate.Title ?: "N/A",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(Color(0xFF8B2FC9).copy(alpha = 0.15f))
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = (candidate.Type ?: "N/A").uppercase(),
-                                            fontSize = 9.sp,
-                                            color = Color(0xFF8B2FC9),
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        text = "Year: ${candidate.Year ?: "N/A"}",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF8B8894)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Source ID: ${candidate.imdbID ?: "N/A"}",
-                                    fontSize = 10.sp,
-                                    color = Color(0xFF6C6975),
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                            
-                            Spacer(modifier = Modifier.width(10.dp))
-                            
-                            // Score Column
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = "Match Score",
-                                    fontSize = 9.sp,
-                                    color = Color(0xFF8B8894)
-                                )
-                                Text(
-                                    text = "$score%",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = if (score >= 70) Color(0xFF10B981) else Color(0xFF8B2FC9)
-                                )
-                            }
-                        }
+                        Text("${wrapper.score}% Fit", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B2FC9))
                     }
                 }
             }
@@ -1240,21 +1539,18 @@ fun MovieSelectionCard(
 @Composable
 fun MovieReviewDetailCard(
     movie: MovieRatingEntity,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    viewModel: MovieViewModel
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF12121F),
-            contentColor = Color.White
-        ),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, Color(0xFF2A2832))
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            // HEADER BAR
+        // CLOSE ACTION HEADER
+        item {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
@@ -1264,12 +1560,11 @@ fun MovieReviewDetailCard(
                         fontSize = 24.sp, 
                         fontWeight = FontWeight.ExtraBold, 
                         color = Color.White,
-                        lineHeight = 28.sp,
-                        letterSpacing = (-0.5).sp
+                        lineHeight = 28.sp
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Year: ${movie.year}  |  Director: ${movie.director}",
+                        text = "Year: ${movie.year}  •  Director: ${movie.director}",
                         fontSize = 11.sp,
                         color = Color(0xFF8B2FC9),
                         fontWeight = FontWeight.SemiBold
@@ -1286,56 +1581,118 @@ fun MovieReviewDetailCard(
                     modifier = Modifier
                         .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF12121F))
+                        .background(Color(0xFF1E1E2F))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close, 
-                        contentDescription = "Close detail", 
+                        contentDescription = "Close", 
                         tint = Color.LightGray,
                         modifier = Modifier.size(16.dp)
                     )
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(16.dp))
+        // ENRICHED REVIEWS RATINGS GRID AREA
+        item {
+            val rtSource = try {
+                com.example.network.Source.valueOf(movie.tomatoURL)
+            } catch (e: Exception) {
+                com.example.network.Source.UNAVAILABLE
+            }
 
-            // ENRICHED MULTI-SOURCE RATINGS GRID (IMDb, Tomatometer, RT Audience)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // ALWAYS show IMDb Score on the left
                 EnrichedRatingWidget(
                     title = "IMDb SCORE",
                     score = movie.imdb,
                     votes = if (movie.imdbVotes != "N/A" && movie.imdbVotes.isNotBlank()) "${movie.imdbVotes} votes" else "N/A",
                     logoColor = Color(0xFF8B2FC9),
                     icon = Icons.Default.Star,
-                    modifier = Modifier.weight(1f)
+                    modifier = if (rtSource == com.example.network.Source.UNAVAILABLE) Modifier.fillMaxWidth() else Modifier.weight(1f)
                 )
-                EnrichedRatingWidget(
-                    title = "TOMATOMETER",
-                    score = movie.rottenTomatoes,
-                    votes = if (movie.tomatoReviews != "N/A" && movie.tomatoReviews.isNotBlank()) "${movie.tomatoReviews} reviews" else "N/A",
-                    logoColor = Color(0xFFE50914),
-                    icon = Icons.Default.Favorite,
-                    status = movie.tomatoImage,
-                    modifier = Modifier.weight(1f)
-                )
-                if (movie.tomatoUserMeter != "N/A" && movie.tomatoUserMeter.isNotBlank()) {
-                    EnrichedRatingWidget(
-                        title = "RT AUDIENCE",
-                        score = movie.tomatoUserMeter,
-                        votes = if (movie.tomatoUserReviews != "N/A" && movie.tomatoUserReviews.isNotBlank()) "${movie.tomatoUserReviews} ratings" else "N/A",
-                        logoColor = Color(0xFF2196F3),
-                        icon = Icons.Default.Group,
-                        modifier = Modifier.weight(1f)
-                    )
+
+                if (rtSource != com.example.network.Source.UNAVAILABLE) {
+                    val scoreColor = if (rtSource == com.example.network.Source.GEMINI) Color(0xFFE8003D) else Color(0xFF2175D9)
+                    val label = if (rtSource == com.example.network.Source.GEMINI) "Tomatometer" else "TMDb Score"
+                    
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF0C0C14))
+                            .border(1.dp, Color(0xFF222234), RoundedCornerShape(14.dp))
+                            .padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                            Text(
+                                text = if (rtSource == com.example.network.Source.GEMINI) "🍅" else "🎬",
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = label,
+                                fontSize = 9.sp,
+                                color = Color(0xFF8B8894),
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = movie.rottenTomatoes,
+                            fontSize = 16.sp,
+                            color = scoreColor,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        
+                        if (rtSource == com.example.network.Source.GEMINI) {
+                            val status = movie.tomatoImage.trim()
+                            val (badgeBg, badgeText, badgeIcon) = when {
+                                status.contains("Certified", ignoreCase = true) -> Triple(Color(0xFF27AE60), "Certified Fresh", "🏆")
+                                status.contains("Fresh", ignoreCase = true) -> Triple(Color(0xFFE8003D), "Fresh", "🍅")
+                                status.contains("Rotten", ignoreCase = true) -> Triple(Color(0xFF7F8C8D), "Rotten", "🦠")
+                                else -> Triple(Color(0xFFE8003D), status.ifBlank { "Fresh" }, "🍅")
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(badgeBg.copy(alpha = 0.15f))
+                                    .border(1.dp, badgeBg.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(badgeIcon, fontSize = 9.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(badgeText, fontSize = 8.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            // TMDB_SUBSTITUTE badge
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF2175D9).copy(alpha = 0.15f))
+                                    .border(1.dp, Color(0xFF2175D9).copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text("via TMDb", fontSize = 8.sp, color = Color.White, fontWeight = FontWeight.ExtraBold)
+                            }
+                        }
+                    }
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // COGNITIVE CONSENSUS GAP INDICATOR
+        // COGNITIVE CONSENSUS GAP GRAPHIC INDICATOR
+        item {
             val tmClean = movie.rottenTomatoes.replace("%", "").trim().toIntOrNull()
             val tumClean = movie.tomatoUserMeter.replace("%", "").trim().toIntOrNull()
             if (tmClean != null && tumClean != null) {
@@ -1366,117 +1723,119 @@ fun MovieReviewDetailCard(
                             lineHeight = 15.sp
                         )
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
+        }
 
-            // STREAMING AVAILABILITY
-            Text("Streaming Outlets Supported", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894), letterSpacing = 0.5.sp)
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val platforms = movie.platforms.split(",").map { it.trim() }.filter { it.isNotEmpty() && it != "None" }
-                if (platforms.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFF12121F))
-                            .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text("Web / Digital Release Only", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-                    }
-                } else {
-                    platforms.forEach { platform ->
-                        val trimmed = platform.trim()
-                        val color = when (trimmed) {
-                            "Netflix" -> Color(0xFFE50914)
-                            "Prime Video" -> Color(0xFF00A8E1)
-                            "Hotstar", "Jio Hotstar" -> Color(0xFF8B2FC9)
-                            "SonyLIV" -> Color(0xFFE25C3E)
-                            "ZEE5" -> Color(0xFF8E24AA)
-                            else -> Color(0xFF12121F)
-                        }
-                        val textCol = if (trimmed == "Hotstar" || trimmed == "Jio Hotstar") Color.Black else Color.White
+        // COLLAPSIBLE PARENTS GUIDE SECTION (Change 4)
+        item {
+            ParentsGuideSection(movie = movie, viewModel = viewModel)
+        }
+
+        // STREAMING OUTLETS LAYOUT
+        item {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("Streaming Outlets Available", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894), letterSpacing = 0.5.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val providers = movie.platforms.split(",").map { it.trim() }.filter { it.isNotEmpty() && it != "N/A" && it != "None" }
+                    if (providers.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(color)
+                                .background(Color(0xFF10101C))
+                                .border(1.dp, Color(0xFF222234), RoundedCornerShape(8.dp))
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
-                            Text(platform, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textCol)
+                            Text("Web / Buy / Rent Released Only", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                        }
+                    } else {
+                        providers.forEach { platform ->
+                            val color = when (platform) {
+                                "Netflix" -> Color(0xFFE50914)
+                                "Prime Video" -> Color(0xFF00A8E1)
+                                "Hotstar", "Disney+ Hotstar", "JioHotstar" -> Color(0xFF1F80E0)
+                                "SonyLIV" -> Color(0xFFFFD700)
+                                "Zee5" -> Color(0xFF8B2FC9)
+                                else -> Color(0xFF1D1B2A)
+                            }
+                            val textCol = if (platform == "SonyLIV") Color.Black else Color.White
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(color)
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(platform, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textCol)
+                            }
                         }
                     }
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(16.dp))
+        // CINEMATIC SYNOPSIS
+        item {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("Cinematic Synopsis", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894), letterSpacing = 0.5.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = movie.synopsis, 
+                    fontSize = 13.sp, 
+                    color = Color.White, 
+                    lineHeight = 20.sp
+                )
+            }
+        }
 
-            // SYNOPSIS
-            Text("Cinematic Synopsis", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894), letterSpacing = 0.5.sp)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = movie.synopsis, 
-                fontSize = 13.sp, 
-                color = Color.White, 
-                lineHeight = 20.sp,
-                fontWeight = FontWeight.Normal
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // DUAL SENTIMENT ANALYSIS SYNTHESES (CRITICS & AUDIENCE)
-            if ((movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) || 
-                (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank())) {
+        // DUAL CONSENSUS BLURBS BY GEMINI AI
+        if ((movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) || 
+            (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank())) {
+            item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF16141A))
-                        .border(1.dp, Color(0xFF25222B), RoundedCornerShape(14.dp))
-                        .padding(12.dp)
+                        .background(Color(0xFF12121E))
+                        .border(1.dp, Color(0xFF212130), RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        "Rateify AI Sentiment Synthesis", 
-                        fontSize = 11.sp, 
-                        fontWeight = FontWeight.Bold, 
-                        color = Color(0xFF8B2FC9), 
-                        letterSpacing = 0.5.sp
-                    )
+                    Text("Rateify AI Consensus summaries", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B2FC9))
                     
                     if (movie.criticConsensus != "N/A" && movie.criticConsensus.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
                         Row {
-                            Icon(imageVector = Icons.Default.Newspaper, contentDescription = null, tint = Color(0xFFE50914), modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.Newspaper, null, tint = Color(0xFFE50914), modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
-                                Text("Critic Consensus Summary (RT Critics)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894))
+                                Text("Critic Consensus (RT Critics)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894))
                                 Text(movie.criticConsensus, fontSize = 11.sp, color = Color.LightGray, lineHeight = 16.sp)
                             }
                         }
                     }
 
                     if (movie.audienceConsensus != "N/A" && movie.audienceConsensus.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(10.dp))
                         Row {
-                            Icon(imageVector = Icons.Default.People, contentDescription = null, tint = Color(0xFF2196F3), modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.People, null, tint = Color(0xFF2196F3), modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
-                                Text("What Audiences Say (IMDb/RT Users)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894))
+                                Text("General Audience (IMDb/RT Users)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8B8894))
                                 Text(movie.audienceConsensus, fontSize = 11.sp, color = Color.LightGray, lineHeight = 16.sp)
                             }
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
             }
+        }
 
-            // GEMINI CRITIC DETAILED CONTEXT SUMMARIES
+        // PRAISE AND COMMON CRITICISMS
+        item {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xFF12121F))
-                    .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(14.dp))
+                    .background(Color(0xFF12121E))
+                    .border(1.dp, Color(0xFF212130), RoundedCornerShape(14.dp))
                     .padding(14.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1487,7 +1846,7 @@ fun MovieReviewDetailCard(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(movie.positiveSummary, fontSize = 12.sp, color = Color(0xFFD4C8C8), lineHeight = 18.sp)
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(imageVector = Icons.Default.ThumbDown, contentDescription = "Cons", tint = Color(0xFFEF5350), modifier = Modifier.size(14.dp))
@@ -1501,6 +1860,249 @@ fun MovieReviewDetailCard(
     }
 }
 
+// COLLAPSIBLE COMPOSABLE PARENTS GUIDE COMPONENT
+@Composable
+fun ShimmerRow() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmer_alpha"
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(Color.Gray.copy(alpha = alpha))
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Box(
+                modifier = Modifier
+                    .width(120.dp)
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Gray.copy(alpha = alpha))
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Gray.copy(alpha = alpha))
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Box(
+            modifier = Modifier
+                .width(60.dp)
+                .height(20.dp)
+                .clip(RoundedCornerShape(50.dp))
+                .background(Color.Gray.copy(alpha = alpha))
+        )
+    }
+}
+
+fun getCategoryRatingColor(rating: String): Color {
+    return when (rating.trim().lowercase()) {
+        "none" -> Color(0xFF2ECC71)
+        "mild" -> Color(0xFFF1C40F)
+        "moderate" -> Color(0xFFE67E22)
+        "severe" -> Color(0xFFE74C3C)
+        else -> Color(0xFF8A8AB0)
+    }
+}
+
+@Composable
+fun ParentsGuideRowItem(categoryName: String, rating: String, description: String, icon: ImageVector) {
+    val pillBg = getCategoryRatingColor(rating)
+    val pillTextColor = if (rating.trim().lowercase() == "mild") Color.Black else Color.White
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = Color(0xFF8B8894),
+            modifier = Modifier.size(16.dp).padding(top = 1.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(categoryName, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50.dp))
+                        .background(pillBg)
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = rating,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = pillTextColor
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                fontSize = 10.sp,
+                color = Color(0xFF8B8894),
+                lineHeight = 14.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun ParentsGuideSection(movie: MovieRatingEntity, viewModel: MovieViewModel) {
+    var isExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isExpanded, movie.title) {
+        if (isExpanded) {
+            viewModel.loadParentsGuide(movie.title, movie.year, movie.rated)
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { isExpanded = !isExpanded },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, Color(0xFF222234))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = "Shield Icon",
+                        tint = Color(0xFF10B981),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Parents Guide",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(14.dp))
+
+                val state by viewModel.parentsGuideState.collectAsState()
+
+                when (val current = state) {
+                    is ParentsGuideState.Loading -> {
+                        Column {
+                            repeat(5) {
+                                ShimmerRow()
+                            }
+                        }
+                    }
+                    is ParentsGuideState.Error -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Error loading parents guide: ${current.message}",
+                                color = Color(0xFFE74C3C),
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { viewModel.loadParentsGuide(movie.title, movie.year, movie.rated) },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B2FC9))
+                            ) {
+                                Text("Retry", color = Color.White)
+                            }
+                        }
+                    }
+                    is ParentsGuideState.Success -> {
+                        val guide = current.guide
+                        
+                        ParentsGuideRowItem("Sex & Nudity", guide.sexNudity.rating, guide.sexNudity.description, Icons.Default.Favorite)
+                        ParentsGuideRowItem("Violence & Gore", guide.violenceGore.rating, guide.violenceGore.description, Icons.Default.Warning)
+                        ParentsGuideRowItem("Profanity & Language", guide.profanity.rating, guide.profanity.description, Icons.Default.Lock)
+                        ParentsGuideRowItem("Alcohol, Drugs & Smoking", guide.substanceUse.rating, guide.substanceUse.description, Icons.Default.Warning)
+                        ParentsGuideRowItem("Frightening Scenes", guide.frighteningScenes.rating, guide.frighteningScenes.description, Icons.Default.Info)
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF1E1E2E))
+                                .border(1.dp, Color(0xFF8B2FC9), RoundedCornerShape(12.dp))
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "🎯 Rated ${guide.overallRating ?: movie.rated}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "India Certification: ${guide.certificationIndia ?: "U/A 13+"}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.LightGray
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Recommended age: ${guide.minAge ?: "13+"}+",
+                                fontSize = 11.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------- PRE-EXISTING COMMONLY USED HELPERS ----------------------
 @Composable
 fun TomatoBadge(status: String) {
     val clean = status.trim().lowercase()
@@ -1539,8 +2141,8 @@ fun EnrichedRatingWidget(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF12121F))
-            .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(14.dp))
+            .background(Color(0xFF0C0C14))
+            .border(1.dp, Color(0xFF222234), RoundedCornerShape(14.dp))
             .padding(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -1576,9 +2178,9 @@ fun HistoryRatingRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF10101C)),
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Color(0xFF1E1C24))
+        border = BorderStroke(1.dp, Color(0xFF212132))
     ) {
         Row(
             modifier = Modifier
@@ -1590,13 +2192,13 @@ fun HistoryRatingRow(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF12121F))
-                    .border(1.dp, Color(0xFF2C2933), RoundedCornerShape(10.dp)),
+                    .background(Color(0xFF0A0A10))
+                    .border(1.dp, Color(0xFF212132), RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = item.imdb.take(3),
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFF8B2FC9)
                 )
@@ -1605,8 +2207,8 @@ fun HistoryRatingRow(
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(item.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                Text(item.genre, fontSize = 11.sp, color = Color(0xFF8B8894))
+                Text(item.title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(item.genre, fontSize = 10.sp, color = Color(0xFF8B8894))
             }
 
             IconButton(
@@ -1614,7 +2216,7 @@ fun HistoryRatingRow(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF12121F))
+                    .background(Color(0xFF1C1319))
             ) {
                 Icon(
                     imageVector = Icons.Default.Delete, 
@@ -1655,466 +2257,6 @@ val platformColors = mapOf(
     "Curiosity Stream" to ChipColor(Color(0xFF1A1A2E), Color(0xFFE94560)),
     "DocuBay" to ChipColor(Color(0xFFFF6B35), Color(0xFFFFFFFF)),
     "Peacock" to ChipColor(Color(0xFF000000), Color(0xFFFFFFFF))
-)
-
-@Composable
-fun CuratedPlatformCatalog(
-    onMovieSelect: (String) -> Unit
-) {
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedPlatform by remember { mutableStateOf("All") }
-    var selectedType by remember { mutableStateOf("All") }
-
-    val allCatalog = listOf(
-        // NETFLIX
-        CatalogItem("Stranger Things", "Sci-Fi, Supernatural, Mystery", "Series", "8.7/10", "Netflix"),
-        CatalogItem("Squid Game", "Survival, Thriller, Drama", "Series", "8.0/10", "Netflix"),
-        CatalogItem("The Irishman", "Crime, Biographical, Drama", "Movie", "7.8/10", "Netflix"),
-        CatalogItem("Black Mirror", "Sci-Fi, Satire, Anthology", "Series", "8.7/10", "Netflix"),
-        CatalogItem("Red Notice", "Action, Comedy, Heist", "Movie", "6.3/10", "Netflix"),
-        CatalogItem("The Last Dance", "Sports, History, Biography", "Documentary", "9.1/10", "Netflix"),
-        CatalogItem("Our Planet", "Nature, Science, Environment", "Documentary", "9.3/10", "Netflix"),
-        CatalogItem("Glass Onion: Knives Out", "Mystery, Comedy, Crime", "Movie", "7.1/10", "Netflix"),
-
-        // PRIME VIDEO
-        CatalogItem("The Boys", "Action, Dark Comedy, Superhero", "Series", "8.7/10", "Prime Video"),
-        CatalogItem("Inception", "Sci-Fi, Heist, Suspense", "Movie", "8.8/10", "Prime Video"),
-        CatalogItem("The Rings of Power", "Fantasy, Adventure, Drama", "Series", "7.0/10", "Prime Video"),
-        CatalogItem("Road House", "Action, Thriller, Combat", "Movie", "6.2/10", "Prime Video"),
-        CatalogItem("Fleabag", "Comedy, Drama, Romantic", "Series", "8.7/10", "Prime Video"),
-
-        // JIOHOTSTAR
-        CatalogItem("Sholay", "Classic Action, Western, Drama", "Movie", "8.2/10", "JioHotstar"),
-        CatalogItem("Chhichhore", "Drama, Comedy, Inspiring", "Movie", "8.3/10", "JioHotstar"),
-        CatalogItem("Loki", "Fantasy, Sci-Fi, Adventure", "Series", "8.2/10", "JioHotstar"),
-        CatalogItem("Special Ops", "Spy, Thriller, Action", "Series", "8.6/10", "JioHotstar"),
-
-        // SONYLIV
-        CatalogItem("Scam 1992", "Drama, Financial Crime, Biographical", "Series", "9.3/10", "SonyLIV"),
-        CatalogItem("Gullak", "Comedy, Family, Heartwarming", "Series", "9.1/10", "SonyLIV"),
-        CatalogItem("Rocket Boys", "Drama, Biography, Science", "Series", "8.9/10", "SonyLIV"),
-
-        // ZEE5
-        CatalogItem("Sunflower", "Comedy, Crime, Mystery", "Series", "8.0/10", "Zee5"),
-        CatalogItem("Sirf Ek Bandaa Kaafi Hai", "Drama, Courtroom, Battle", "Movie", "8.9/10", "Zee5"),
-        CatalogItem("Pitchers", "Drama, Comedy, Startup life", "Series", "9.1/10", "Zee5"),
-        
-        // DISNEY+ HOTSTAR
-        CatalogItem("The Mandalorian", "Sci-Fi, Adventure", "Series", "8.7/10", "Disney+ Hotstar"),
-        CatalogItem("Hamilton", "Musical, History", "Movie", "8.4/10", "Disney+ Hotstar"),
-
-        // APPLE TV+
-        CatalogItem("Ted Lasso", "Comedy, Sports, Heartwarming", "Series", "8.8/10", "Apple TV+"),
-        CatalogItem("Severance", "Sci-Fi, Thriller, Mystery", "Series", "8.7/10", "Apple TV+"),
-
-        // MAX
-        CatalogItem("Succession", "Drama, Satire", "Series", "8.9/10", "Max"),
-        CatalogItem("The Last of Us", "Action, Drama, Sci-Fi", "Series", "8.8/10", "Max"),
-
-        // HULU
-        CatalogItem("The Bear", "Comedy, Drama", "Series", "8.6/10", "Hulu"),
-        CatalogItem("Only Murders in the Building", "Comedy, Crime, Mystery", "Series", "8.1/10", "Hulu"),
-
-        // YOUTUBE PREMIUM
-        CatalogItem("Cobra Kai", "Action, Comedy, Drama", "Series", "8.5/10", "YouTube Premium"),
-        
-        // PARAMOUNT+
-        CatalogItem("Yellowstone", "Drama, Western", "Series", "8.7/10", "Paramount+"),
-        
-        // DISCOVERY+
-        CatalogItem("Planet Earth II", "Documentary, Nature", "Documentary", "9.5/10", "Discovery+"),
-        
-        // MUBI
-        CatalogItem("Perfect Days", "Drama", "Movie", "7.9/10", "MUBI"),
-        
-        // AHA
-        CatalogItem("Telugu Drama", "Action, Drama", "Movie", "7.5/10", "Aha"),
-        
-        // HOICHOI
-        CatalogItem("Byomkesh", "Detective, Mystery", "Series", "8.1/10", "Hoichoi"),
-        
-        // LIONSGATE PLAY
-        CatalogItem("John Wick: Chapter 4", "Action, Thriller", "Movie", "7.7/10", "Lionsgate Play"),
-        
-        // MX PLAYER
-        CatalogItem("Ashram", "Crime, Drama", "Series", "7.4/10", "MX Player"),
-        
-        // VOOT
-        CatalogItem("Asur", "Crime, Thriller", "Series", "8.4/10", "Voot"),
-        
-        // SUN NXT
-        CatalogItem("Doctor", "Action, Thriller, Dark Comedy", "Movie", "7.4/10", "Sun NXT"),
-
-        // SHEMAROOME
-        CatalogItem("Malgudi Days", "Classic, Drama, Nostalgia", "Series", "8.9/10", "ShemarooMe"),
-
-        // CURIOSITY STREAM
-        CatalogItem("Secrets of the Solar System", "Space, Science", "Documentary", "8.2/10", "Curiosity Stream")
-    )
-
-    val platforms = listOf(
-        "All", "Netflix", "Prime Video", "JioHotstar", "Zee5", "SonyLIV", 
-        "Voot", "MX Player", "Sun NXT", "Disney+ Hotstar", "Aha", "Hoichoi", 
-        "Max", "Apple TV+", "Hulu", "YouTube Premium", "MUBI", "Paramount+", 
-        "Discovery+", "Lionsgate Play", "ShemarooMe", "Curiosity Stream"
-    )
-    val types = listOf("All", "Movie", "Series", "Documentary")
-
-    val filteredCatalog = allCatalog.filter { item ->
-        val matchesPlatform = selectedPlatform == "All" || item.platform == selectedPlatform
-        val matchesType = selectedType == "All" || item.type == selectedType
-        val matchesSearch = searchQuery.isBlank() || 
-            item.title.contains(searchQuery, ignoreCase = true) || 
-            item.genre.contains(searchQuery, ignoreCase = true) || 
-            item.platform.contains(searchQuery, ignoreCase = true)
-        
-        matchesPlatform && matchesType && matchesSearch
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Search movies, series...", color = Color(0xFF8A8AB0), fontSize = 14.sp) },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp),
-            shape = RoundedCornerShape(14.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFF8B2FC9),
-                unfocusedBorderColor = Color(0xFF8B2FC9),
-                focusedContainerColor = Color(0xFF1E1E30),
-                unfocusedContainerColor = Color(0xFF1E1E30),
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White
-            ),
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Search icon",
-                    tint = Color(0xFF8A8AB0)
-                )
-            },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Clear search",
-                            tint = Color.White
-                        )
-                    }
-                }
-            }
-        )
-
-        Text(
-            text = "Trending Catalog Hub",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            letterSpacing = 0.5.sp
-        )
-        Text(
-            text = "Explore trending movies, series, and documentaries dynamically sorted across major networks.",
-            fontSize = 11.sp,
-            color = Color(0xFF8B8894),
-            modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        // Platform Filter Row
-        Text(
-            text = "NETWORK OUTLETS",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        Box(modifier = Modifier.fillMaxWidth()) {
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(end = 40.dp) // Leave space for fade
-            ) {
-                items(platforms) { platform ->
-                    val active = selectedPlatform == platform
-                    val chipColor = platformColors[platform] ?: ChipColor(Color.DarkGray, Color.White)
-                    PlatformBadgeButton(
-                        title = platform,
-                        active = active,
-                        platformColor = chipColor,
-                        onClick = { selectedPlatform = platform }
-                    )
-                }
-            }
-            // Fade gradient at the end
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .width(40.dp)
-                    .fillMaxHeight()
-                    .background(
-                        Brush.horizontalGradient(
-                            listOf(Color.Transparent, Color(0xFF0A0A1A))
-                        )
-                    )
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Content Type Filter Row
-        Text(
-            text = "CONTENT TYPE",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(types) { cType ->
-                val active = selectedType == cType
-                val label = when (cType) {
-                    "Series" -> "TV Series"
-                    "Movie" -> "Movies"
-                    "Documentary" -> "Documentaries"
-                    else -> "All Types"
-                }
-                PlatformBadgeButton(
-                    title = label,
-                    active = active,
-                    platformColor = ChipColor(Color(0xFFE8003D), Color.White),
-                    onClick = { selectedType = cType }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (filteredCatalog.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF12121F))
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No matching titles found in this filter combination.", color = Color(0xFF8B8894), fontSize = 12.sp)
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                items(filteredCatalog) { movie ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onMovieSelect(movie.title) },
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF12121F)),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Box {
-                            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-                                // Thin left border accent in red when Tomatometer is high (simulated as criticPercentage >= 60)
-                            val baseNum = movie.score.replace("/10", "").toDoubleOrNull() ?: 7.5
-                            val criticPercentage = (baseNum * 10 + 6).coerceIn(40.0, 99.0).toInt()
-                            val audiencePercentage = (baseNum * 10 + 2).coerceIn(45.0, 98.0).toInt()
-                            
-                            if (criticPercentage >= 60) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(3.dp)
-                                        .fillMaxHeight()
-                                        .background(Color(0xFFE8003D))
-                                )
-                            }
-                            
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(14.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.Top,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = movie.title,
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = Color.White
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = movie.genre,
-                                            fontSize = 12.sp,
-                                            color = Color(0xFF9E9E9E)
-                                        )
-                                    }
-                                    
-                                    Column(
-                                        horizontalAlignment = Alignment.End,
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        // Streaming Platform Badge
-                                        val platformColor = when(movie.platform) {
-                                            "Netflix" -> Color(0xFFE50914)
-                                            "Prime Video" -> Color(0xFF00A8E1)
-                                            "Jio Hotstar" -> Color(0xFF8B2FC9)
-                                            "SonyLIV" -> Color(0xFFE25C3E)
-                                            "ZEE5" -> Color(0xFF8E24AA)
-                                            else -> Color.DarkGray
-                                        }
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(50))
-                                                .background(platformColor)
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = movie.platform.uppercase(),
-                                                fontSize = 8.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.White
-                                            )
-                                        }
-                                        
-                                        // Content Type Badge
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(50))
-                                                .background(Color.White.copy(alpha = 0.15f))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = movie.type.uppercase(),
-                                                fontSize = 8.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color.White
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                // Score Layout: [🍅 93% Tomatometer] [🍿 89% Audience]
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(24.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🍅", fontSize = 14.sp)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "$criticPercentage%",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Tomatometer", fontSize = 12.sp, color = Color(0xFF9E9E9E))
-                                    }
-
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text("🍿", fontSize = 14.sp)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "$audiencePercentage%",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Audience", fontSize = 12.sp, color = Color(0xFF9E9E9E))
-                                    }
-                                }
-                            }
-                        } // Closes the Row(IntrinsicSize)
-                        
-                        // Subtle gradient overlay at card bottom
-                        Box(
-                            modifier = this@Box.run { Modifier
-                                .fillMaxWidth()
-                                .height(30.dp)
-                                .align(Alignment.BottomCenter)
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.4f))
-                                    )
-                                )
-                            }
-                        )
-                    } // Closes Box
-                } // Closes Card
-                } // Added missing closing brace for items()
-
-                item {
-                    Spacer(modifier = Modifier.height(20.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PlatformBadgeButton(
-    title: String,
-    active: Boolean,
-    platformColor: ChipColor,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val borderColor = if (title == "Peacock" && active) {
-        Brush.horizontalGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Blue, Color.Magenta))
-    } else if (!active) {
-        androidx.compose.ui.graphics.SolidColor(Color(0xFF2A2A3E))
-    } else {
-        androidx.compose.ui.graphics.SolidColor(Color.Transparent)
-    }
-
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (active) platformColor.bg else Color(0xFF1E1E2E))
-            .border(1.dp, borderColor, RoundedCornerShape(50))
-            .then(
-                if (active) {
-                    Modifier.shadow(4.dp, RoundedCornerShape(50), ambientColor = platformColor.bg, spotColor = platformColor.bg)
-                } else {
-                    Modifier
-                }
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-            color = if (active) platformColor.text else Color(0xFF8A8AB0)
-        )
-    }
-}
-
-data class CatalogItem(
-    val title: String,
-    val genre: String,
-    val type: String, // "Movie", "Series", "Documentary"
-    val score: String,
-    val platform: String
 )
 
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {

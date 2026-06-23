@@ -83,7 +83,8 @@ data class MovieRatingResult(
     val tomatoURL: String = "N/A",
     // Gemini-powered sentiment summary fields
     val criticConsensus: String = "N/A",
-    val audienceConsensus: String = "N/A"
+    val audienceConsensus: String = "N/A",
+    val rated: String = "N/A"
 )
 
 @JsonClass(generateAdapter = true)

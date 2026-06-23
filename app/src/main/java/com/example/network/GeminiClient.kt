@@ -48,6 +48,8 @@ object GeminiClient {
             .create(GeminiApi::class.java)
     }
 
+    fun getMoshiApi(): GeminiApi = api
+
     data class CandidateWithScore(
         val candidate: OmdbSearchResult,
         val score: Int
@@ -534,7 +536,8 @@ object GeminiClient {
                             tomatoURL = omdb.tomatoURL ?: "N/A",
                             // Gemini sentiment summaries
                             criticConsensus = enrichment.criticConsensus ?: "N/A",
-                            audienceConsensus = enrichment.audienceConsensus ?: "N/A"
+                            audienceConsensus = enrichment.audienceConsensus ?: "N/A",
+                            rated = omdb.Rated ?: "N/A"
                         )
                     }
                 }
@@ -573,7 +576,8 @@ object GeminiClient {
             tomatoUserReviews = omdb.tomatoUserReviews ?: "N/A",
             tomatoURL = omdb.tomatoURL ?: "N/A",
             criticConsensus = "N/A",
-            audienceConsensus = "N/A"
+            audienceConsensus = "N/A",
+            rated = omdb.Rated ?: "N/A"
         )
     }
 
