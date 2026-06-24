@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.MovieDatabase
 import com.example.data.MovieRatingEntity
+import com.example.data.WatchlistEntity
+import com.example.data.toWatchlistEntity
 import com.example.network.GeminiClient
 import com.example.network.TmdbClient
 import com.example.network.TmdbTarget
@@ -17,7 +19,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 
 sealed interface SearchUiState {
     object Idle : SearchUiState
@@ -74,33 +78,192 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     private val _trendingDocumentaries = MutableStateFlow<List<TmdbTarget>>(emptyList())
     val trendingDocumentaries: StateFlow<List<TmdbTarget>> = _trendingDocumentaries.asStateFlow()
 
+    private val _risingNow = MutableStateFlow<List<TmdbTarget>>(emptyList())
+    val risingNow: StateFlow<List<TmdbTarget>> = _risingNow.asStateFlow()
+
+    private val _criticallyAcclaimed = MutableStateFlow<List<TmdbTarget>>(emptyList())
+    val criticallyAcclaimed: StateFlow<List<TmdbTarget>> = _criticallyAcclaimed.asStateFlow()
+
+    private val _hiddenGems = MutableStateFlow<List<TmdbTarget>>(emptyList())
+    val hiddenGems: StateFlow<List<TmdbTarget>> = _hiddenGems.asStateFlow()
+
     // Live rating mappings resolved for Homepage cards to bypass massive API overload
     private val _mediaRatings = MutableStateFlow<Map<Int, MovieRatingEntity>>(emptyMap())
     val mediaRatings: StateFlow<Map<Int, MovieRatingEntity>> = _mediaRatings.asStateFlow()
 
+    private val _isLoading = MutableStateFlow<Boolean>(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _selectedMovieGenres = MutableStateFlow<Set<Int>>(emptySet())
+    val selectedMovieGenres: StateFlow<Set<Int>> = _selectedMovieGenres.asStateFlow()
+
+    private val _selectedTvGenres = MutableStateFlow<Set<Int>>(emptySet())
+    val selectedTvGenres: StateFlow<Set<Int>> = _selectedTvGenres.asStateFlow()
+
+    private val _selectedDocGenres = MutableStateFlow<Set<Int>>(emptySet())
+    val selectedDocGenres: StateFlow<Set<Int>> = _selectedDocGenres.asStateFlow()
+
+    fun toggleMovieGenre(genreId: Int) {
+        val current = _selectedMovieGenres.value
+        _selectedMovieGenres.value = if (current.contains(genreId)) current - genreId else current + genreId
+    }
+
+    fun toggleTvGenre(genreId: Int) {
+        val current = _selectedTvGenres.value
+        _selectedTvGenres.value = if (current.contains(genreId)) current - genreId else current + genreId
+    }
+
+    fun toggleDocGenre(genreId: Int) {
+        val current = _selectedDocGenres.value
+        _selectedDocGenres.value = if (current.contains(genreId)) current - genreId else current + genreId
+    }
+
+    fun clearMovieGenres() {
+        _selectedMovieGenres.value = emptySet()
+    }
+
+    fun clearTvGenres() {
+        _selectedTvGenres.value = emptySet()
+    }
+
+    fun clearDocGenres() {
+        _selectedDocGenres.value = emptySet()
+    }
+
+    val platformProviderIds = mapOf(
+        "All"              to null,
+        "Netflix"          to 8,
+        "Prime Video"      to 9,
+        "JioHotstar"       to 122,
+        "Disney+ Hotstar"  to 122,
+        "SonyLIV"          to 237,
+        "Zee5"             to 232,
+        "Apple TV+"        to 350,
+        "Max"              to 384,
+        "Hulu"             to 15,
+        "YouTube Premium"  to 188,
+        "Voot"             to 121,
+        "MX Player"        to 515,
+        "Sun NXT"          to 309,
+        "Aha"              to 532,
+        "Hoichoi"          to 315,
+        "Lionsgate Play"   to 561,
+        "Discovery+"       to 510,
+        "Paramount+"       to 531,
+        "MUBI"             to 11,
+        "Peacock"          to 386,
+        "Shudder"          to 99,
+        "Crunchyroll"      to 283
+    )
+
     init {
-        loadHomepageContent()
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val prefs = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+            val isRegionFixed = prefs.getBoolean("region_lock_removed", false)
+            if (!isRegionFixed) {
+                try {
+                    // 1. Clear Room DB ratings/content cache
+                    MovieDatabase.getDatabase(context).movieDao().clearAll()
+                    
+                    // 2. Clear Tmdb SharedPreferences cache
+                    val rateifyPrefs = context.getSharedPreferences("RateifyPrefs", Context.MODE_PRIVATE)
+                    rateifyPrefs.edit().apply {
+                        remove("trending_all")
+                        remove("trending_all_timestamp")
+                        remove("trending_movies")
+                        remove("trending_movies_timestamp")
+                        remove("trending_tv")
+                        remove("trending_tv_timestamp")
+                        remove("top_rated_movies")
+                        remove("top_rated_movies_timestamp")
+                        remove("top_rated_tv")
+                        remove("top_rated_tv_timestamp")
+                        remove("trending_documentaries")
+                        remove("trending_documentaries_timestamp")
+                    }.apply()
+                    
+                    Log.d("CACHE", "Cleared old region-locked cache")
+                } catch (e: Exception) {
+                    Log.e("CACHE", "Failed clearing cache on region lock removal", e)
+                }
+                prefs.edit().putBoolean("region_lock_removed", true).apply()
+            }
+            loadHomepageContent()
+        }
     }
 
     fun loadHomepageContent() {
+        loadContentForPlatform("All")
+    }
+
+    fun loadContentForPlatform(platform: String) {
+        val movieGenreQuery = if (_selectedMovieGenres.value.isEmpty()) null else _selectedMovieGenres.value.joinToString("|")
+        val tvGenreQuery = if (_selectedTvGenres.value.isEmpty()) null else _selectedTvGenres.value.joinToString("|")
+        val docGenreQuery = if (_selectedDocGenres.value.isEmpty()) null else _selectedDocGenres.value.joinToString("|")
+
         viewModelScope.launch(Dispatchers.IO) {
+            _isLoading.value = true
+            _error.value = null
+            Log.d("PLATFORM", "Selected: $platform, Movie genres: $movieGenreQuery, TV genres: $tvGenreQuery, Doc genres: $docGenreQuery")
             try {
                 val context = getApplication<Application>()
-                val all = TmdbClient.fetchTrendingAll(context)
-                val movies = TmdbClient.fetchTrendingMovies(context)
-                val tv = TmdbClient.fetchTrendingTv(context)
-                val topMovies = TmdbClient.fetchTopRatedMovies(context)
-                val topTv = TmdbClient.fetchTopRatedTv(context)
-                val docs = TmdbClient.fetchTrendingDocumentaries(context)
+                val providerId = platformProviderIds[platform]
 
-                _trendingAll.value = all
-                _trendingMovies.value = movies
-                _trendingTv.value = tv
-                _topRatedMovies.value = topMovies
-                _topRatedTv.value = topTv
-                _trendingDocumentaries.value = docs
+                if (platform == "All" && movieGenreQuery == null && tvGenreQuery == null && docGenreQuery == null) {
+                    val allDeferred = async { TmdbClient.fetchTrendingAll(context) }
+                    val moviesDeferred = async { TmdbClient.fetchTrendingMovies(context) }
+                    val tvDeferred = async { TmdbClient.fetchTrendingTv(context) }
+                    val docsDeferred = async { TmdbClient.fetchTrendingDocumentaries(context) }
+                    val risingDeferred = async { TmdbClient.fetchRisingNow(context, providerId) }
+                    val acclaimedDeferred = async { TmdbClient.fetchCriticallyAcclaimed(context, providerId) }
+                    val gemsDeferred = async { TmdbClient.fetchHiddenGems(context, providerId) }
+
+                    _trendingAll.value = allDeferred.await()
+                    _trendingMovies.value = moviesDeferred.await()
+                    _trendingTv.value = tvDeferred.await()
+                    _trendingDocumentaries.value = docsDeferred.await()
+                    _risingNow.value = risingDeferred.await()
+                    _criticallyAcclaimed.value = acclaimedDeferred.await()
+                    _hiddenGems.value = gemsDeferred.await()
+                } else {
+                    // Fetch filtered movies
+                    val moviesDeferred = async { TmdbClient.fetchByPlatform(context, providerId, "Movies", movieGenreQuery) }
+                    val tvDeferred = async { TmdbClient.fetchByPlatform(context, providerId, "TV Series", tvGenreQuery) }
+                    val docsDeferred = async { TmdbClient.fetchByPlatform(context, providerId, "Documentaries", docGenreQuery) }
+                    val risingDeferred = async { TmdbClient.fetchRisingNow(context, providerId) }
+                    val acclaimedDeferred = async { TmdbClient.fetchCriticallyAcclaimed(context, providerId) }
+                    val gemsDeferred = async { TmdbClient.fetchHiddenGems(context, providerId) }
+
+                    val movies = moviesDeferred.await()
+                    val tv = tvDeferred.await()
+                    val docs = docsDeferred.await()
+
+                    _trendingMovies.value = movies
+                    _trendingTv.value = tv
+                    _trendingDocumentaries.value = docs
+
+                    // Fetch overall / CombinedAll selection
+                    val combinedAll = if (movieGenreQuery == null && tvGenreQuery == null) {
+                        TmdbClient.fetchByPlatform(context, providerId, "All")
+                    } else {
+                        (movies + tv).distinctBy { it.id }.sortedByDescending { it.popularity ?: 0.0 }
+                    }
+                    _trendingAll.value = combinedAll
+                    _risingNow.value = risingDeferred.await()
+                    _criticallyAcclaimed.value = acclaimedDeferred.await()
+                    _hiddenGems.value = gemsDeferred.await()
+
+                    Log.d("PLATFORM", "Fetched platform and genres successfully! Movies count: ${movies.size}, TV: ${tv.size}")
+                }
             } catch (e: Exception) {
-                Log.e("MovieViewModel", "Error loading Homepage content", e)
+                Log.e("MovieViewModel", "Error loading content for platform $platform", e)
+                _error.value = e.message ?: "Failed to load content. Please check connection."
+            } finally {
+                _isLoading.value = false
             }
         }
     }
@@ -384,5 +547,55 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetSearchState() {
         _searchUiState.value = SearchUiState.Idle
+    }
+
+    // Watchlist persistence integration
+    private val watchlistDao = MovieDatabase.getDatabase(application).watchlistDao()
+
+    val watchlist = watchlistDao.getAllFlow()
+        .stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+            emptyList()
+        )
+
+    val watchlistCount = watchlistDao.getCount()
+        .stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+            0
+        )
+
+    fun toggleWatchlist(item: TmdbTarget) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val isAdded = watchlistDao.isInWatchlist(item.id)
+            val titleStr = item.title ?: item.name ?: "Unknown"
+            if (isAdded) {
+                watchlistDao.remove(item.id)
+                launch(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        getApplication(),
+                        "Removed from Watchlist: $titleStr",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } else {
+                // Try to enrich with rating info from current memory ratings cache
+                val rating = _mediaRatings.value[item.id]
+                val entity = item.toWatchlistEntity(
+                    imdbRating = rating?.imdb,
+                    rtScore = rating?.rottenTomatoes,
+                    streamingProvider = rating?.platforms
+                )
+                watchlistDao.add(entity)
+                launch(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        getApplication(),
+                        "Added to Watchlist: $titleStr",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
     }
 }

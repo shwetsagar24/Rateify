@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.RateifyAI" parent="android:Theme.DeviceDefault.NoActionBar">
-        <item name="android:colorPrimary">@color/brand_red</item>
-        <item name="android:colorPrimaryDark">@color/brand_red_dark</item>
+    <!-- Light Theme Resources (Custom overrides if active) -->
+    <style name="Theme.RateifyAI.Light" parent="Theme.RateifyAI">
         <item name="android:colorBackground">@color/bg_primary</item>
         <item name="android:statusBarColor">@color/bg_primary</item>
         <item name="android:navigationBarColor">@color/bg_surface</item>

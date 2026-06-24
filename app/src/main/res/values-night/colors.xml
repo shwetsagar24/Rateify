@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <color name="bg_primary">#F5F5F8</color>
-  <color name="bg_surface">#FFFFFF</color>
-  <color name="bg_surface2">#F0F0F5</color>
-  <color name="bg_surface3">#E8E8F0</color>
-  <color name="border">#E0E0EA</color>
+  <color name="bg_primary">#0A0A0F</color>
+  <color name="bg_surface">#111118</color>
+  <color name="bg_surface2">#1A1A24</color>
+  <color name="bg_surface3">#222230</color>
+  <color name="border">#2A2A3A</color>
 
   <color name="brand_red">#E50914</color>
   <color name="brand_red_dark">#B20710</color>
@@ -12,9 +12,9 @@
   <color name="brand_gold">#FFD700</color>
   <color name="brand_purple">#7B2FBE</color>
 
-  <color name="text_primary">#0A0A0F</color>
-  <color name="text_secondary">#606075</color>
-  <color name="text_tertiary">#A0A0B8</color>
+  <color name="text_primary">#FFFFFF</color>
+  <color name="text_secondary">#A0A0B8</color>
+  <color name="text_tertiary">#606075</color>
 
   <color name="rating_imdb">#FFD700</color>
   <color name="rating_rt">#FA320A</color>

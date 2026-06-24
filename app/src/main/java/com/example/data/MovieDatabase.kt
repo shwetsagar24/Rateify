@@ -5,11 +5,15 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [MovieRatingEntity::class, RTCacheEntity::class, ParentsGuideCacheEntity::class], version = 4, exportSchema = false)
+import com.example.data.WatchlistEntity
+import com.example.data.WatchlistDao
+
+@Database(entities = [MovieRatingEntity::class, RTCacheEntity::class, ParentsGuideCacheEntity::class, WatchlistEntity::class], version = 5, exportSchema = false)
 abstract class MovieDatabase : RoomDatabase() {
     abstract fun movieDao(): MovieDao
     abstract fun rtCacheDao(): RTCacheDao
     abstract fun parentsGuideDao(): ParentsGuideDao
+    abstract fun watchlistDao(): WatchlistDao
 
     companion object {
         @Volatile
